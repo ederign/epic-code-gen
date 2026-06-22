@@ -3,6 +3,7 @@ artifacts/
 tmp/
 .target-repo/
 .context/
+epic-reports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
