@@ -9,20 +9,26 @@ All skills read from and write to the `artifacts/` directory.
 ```
 artifacts/                          # gitignored
   epic-tasks/                       # Epic files with YAML frontmatter
-    RHAISTRAT-1665-E001.md
+    RHAISTRAT-1749-E001.md
   codegen-runs/                     # Per-epic run audit trail
-    RHAISTRAT-1665-E001/
+    RHAISTRAT-1749-E001/
       run-metadata.yaml
-      epic-task-snapshot.md
-      readiness-assessment.md
       codegen-spec.md
-      iterations/
-        01-diff.patch
-        01-validation.md
-      final-diff.patch
-      pr-url.txt
-  codegen-reviews/                  # Scored review files with YAML frontmatter
-    RHAISTRAT-1665-E001-review.md
+      codegen-plan.md
+      v1/                           # Version 1 artifacts
+        diff.patch
+        validation.json
+        implementer-report.md
+        review-tests.md
+        review-intent.md
+        review-lint.md
+        review-architecture.md
+        review-patterns.md
+        scores.json
+      v2/                           # Revision after review
+        revision-notes.md
+        ...
+      final-diff.patch              # Best passing version
 ```
 
 ### Frontmatter
@@ -59,13 +65,23 @@ python3 scripts/state.py clean
 
 ## Target Repo
 
-Target repos are cloned into `.target-repo/` (gitignored). The codegen subagent runs inside this directory with the codegen spec as prompt.
+Target repos are cloned into `.target-repo/` (gitignored). Use `clone_target.py` for cloning:
 
 ```bash
-# Clone target repo and create epic branch
-git clone <repo-url> .target-repo
-cd .target-repo && git checkout -b epic/RHAISTRAT-NNNN-ENNN
+python3 scripts/clone_target.py <repo-url> <EPIC_ID> [--dest .target-repo] [--fork-owner user] [--clean]
 ```
+
+This creates branch `epic/<EPIC_ID>` and optionally sets up a fork remote.
+
+## Target Validation
+
+Detect language and run lint/typecheck/test against the target repo:
+
+```bash
+python3 scripts/validate_target.py <repo-path> [--json] [--checks lint,test]
+```
+
+Supports Go, Python, TypeScript, JavaScript, Rust. Discovers commands from Makefile targets and package.json scripts.
 
 ## Repo Readiness
 
@@ -90,19 +106,51 @@ bash scripts/fetch-architecture-context.sh /path/to/local/architecture-context
 
 After every code change, run `make test-unit` for script changes. Run `make test` for the full suite before pushing. A change is not done until tests pass.
 
+## Review Score Aggregation
+
+Aggregate reviewer scores with weights and determine pass/fail:
+
+```bash
+python3 scripts/score_reviews.py <reviews-dir> [--json]
+```
+
+Weights: tests 25%, intent 25%, lint 20%, architecture 20%, patterns 10%.
+Verdict: pass (>=8.0, no dim <6.0), near-miss (>=7.5), fail, incomplete.
+
+Reviewer rubrics live in `rubrics/` — one per dimension. Each defines scoring
+criteria (1-10), calibration tables, and output format.
+
 ## Code Generation Workflow
 
+Use `/epic-codegen EPIC_ID [--dry-run] [--max-iterations N] [--fork-owner USER]`
+
+The skill automates the Superpowers methodology:
+
 ```
-1. Read epic-task file (target_repo, components, acceptance criteria, dependencies)
-2. Check dependencies satisfied (upstream epics status=Validated)
-3. Clone target repo, branch epic/RHAISTRAT-NNNN-ENNN
-4. Fetch architecture context for target component
-5. Pattern discovery in target repo (reference implementations)
-6. Generate codegen spec (spec-first approach)
-7. Dispatch codegen subagent into .target-repo/ with spec as prompt
-8. Validate: lint, typecheck, tests (existing + generated)
-9. Iteration loop on failure (max configurable: 10/15/20 by effort size)
-10. On pass: create PR (or save diff if dry-run)
+Phase 1 — Spec & Plan:
+  1. Read epic-task, validate dependencies
+  2. Clone target repo, validate readiness (>=8/12)
+  3. Pattern discovery in target repo
+  4. Generate codegen-spec.md (AC-to-component mapping)
+  5. Generate codegen-plan.md (task-by-task with TDD steps)
+
+Phase 2 — Subagent-Driven Development:
+  6. Dispatch implementer subagent (model: sonnet)
+  7. Validate: lint, typecheck, tests
+  8. Generate diff file
+
+Phase 3 — Multi-Dimensional Review:
+  9. Dispatch 5 reviewer subagents in parallel (model: sonnet)
+  10. Aggregate weighted scores
+
+Phase 4 — Iterate or Complete:
+  11. Pass (>=8.0): save final diff
+  12. Fail: adjudicate findings, write revision notes, re-dispatch
+  13. Exhausted: report best version
 ```
 
-Every step is logged to `artifacts/codegen-runs/`.
+Model selection: opus for orchestrator (judgment), sonnet for implementers
+and reviewers (mechanical). Always specify model explicitly in dispatches.
+
+All artifacts saved to `artifacts/codegen-runs/<EPIC_ID>/v<N>/`.
+State persisted via `tmp/epic-codegen-<EPIC_ID>.json`.
