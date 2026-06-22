@@ -1,0 +1,19 @@
+[project]
+name = "epic-code-gen"
+version = "0.1.0"
+description = "Generate implementation code from approved strategies and epic decompositions"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests requiring external resources",
+]
