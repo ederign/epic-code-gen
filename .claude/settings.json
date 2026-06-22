@@ -6,7 +6,8 @@
       "Bash(python3 scripts/repo_readiness.py *)",
       "Bash(python3 scripts/validate_target.py *)",
       "Bash(python3 scripts/clone_target.py *)",
-      "Bash(python3 scripts/score_reviews.py *)"
+      "Bash(python3 scripts/score_reviews.py *)",
+      "Bash(python3 scripts/fetch_epic.py *)"
     ],
     "additionalDirectories": [".target-repo"]
   }

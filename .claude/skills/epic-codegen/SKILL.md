@@ -84,14 +84,26 @@ python3 scripts/validate_target.py .target-repo/ --json
 
 Record the discovered language and validation commands for later use.
 
-### Step 5: Read Repo Context
+### Step 5: Read Strategy Context
+
+Read the strategy document for the epic's `strategy_key`:
+```
+artifacts/strategies/${STRATEGY_KEY}.md
+```
+
+This contains the business need, technical approach, affected components,
+dependencies, staff engineer input, non-functional requirements, and out
+of scope. Together with the epic-task body, this is your "interview
+transcript" — all the context a product owner would provide.
+
+### Step 6: Read Repo Context
 
 Read from `.target-repo/`:
 - `CLAUDE.md` or `AGENTS.md` (target repo conventions)
 - `CONTRIBUTING.md` if present
 - Key files named in the epic body (reference implementations, target files)
 
-### Step 6: Pattern Discovery
+### Step 7: Pattern Discovery
 
 Search the target repo for patterns referenced in the epic body:
 - Function names, type names, file paths mentioned in the epic
@@ -101,7 +113,7 @@ Search the target repo for patterns referenced in the epic body:
 Read the reference files. These become the "reference pattern" sections in
 the codegen spec.
 
-### Step 7: Write Codegen Spec
+### Step 8: Write Codegen Spec
 
 Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 
@@ -109,7 +121,7 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 # Spec: ${EPIC_ID}
 
 ## Context
-<from epic-task body + target repo CLAUDE.md — the "interview answers">
+<from epic-task body + strategy document + target repo CLAUDE.md — the "interview answers">
 
 ## Design Decisions
 | Decision | Choice | Rationale |
@@ -129,7 +141,7 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 Auto-validate: every AC from the epic-task body has a corresponding Component.
 If any AC is unmapped, stop and report the gap.
 
-### Step 8: Write Codegen Plan
+### Step 9: Write Codegen Plan
 
 Create `artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`:
 
@@ -177,7 +189,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=planned vers
 
 ## Phase 2: Subagent-Driven Development
 
-### Step 9: Record Base Commit
+### Step 10: Record Base Commit
 
 ```bash
 cd .target-repo && git rev-parse HEAD
@@ -185,7 +197,7 @@ cd .target-repo && git rev-parse HEAD
 
 Save as `BASE_SHA` — used for diff generation later.
 
-### Step 10: Dispatch Implementer Subagent
+### Step 11: Dispatch Implementer Subagent
 
 Dispatch via Agent tool with **model: sonnet** (mechanical execution):
 
@@ -237,7 +249,7 @@ Agent:
     - Concerns if any
 ```
 
-### Step 11: Handle Implementer Response
+### Step 12: Handle Implementer Response
 
 **DONE:** proceed to validation (Step 12).
 
@@ -252,7 +264,7 @@ before proceeding. If observations only, note and proceed.
 3. Task too large → break it down, re-dispatch subtasks
 4. Plan wrong → stop, report to user
 
-### Step 12: Validate Target Repo
+### Step 13: Validate Target Repo
 
 ```bash
 python3 scripts/validate_target.py .target-repo/ --json
@@ -260,7 +272,7 @@ python3 scripts/validate_target.py .target-repo/ --json
 
 Record validation results.
 
-### Step 13: Generate Diff
+### Step 14: Generate Diff
 
 ```bash
 cd .target-repo && git diff ${BASE_SHA}..HEAD > ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
@@ -268,7 +280,7 @@ cd .target-repo && git diff ${BASE_SHA}..HEAD > ../artifacts/codegen-runs/${EPIC
 
 The diff is a FILE — reviewers Read it, it never enters orchestrator context.
 
-### Step 14: Save Version Artifacts
+### Step 15: Save Version Artifacts
 
 Save to `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/`:
 - `diff.patch` — the code changes
@@ -282,7 +294,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=review versi
 
 ## Phase 3: Multi-Dimensional Review
 
-### Step 15: Dispatch 5 Reviewer Subagents
+### Step 16: Dispatch 5 Reviewer Subagents
 
 Dispatch in parallel via 5 Agent tool calls, all with **model: sonnet**:
 
@@ -313,7 +325,7 @@ Agent:
 Where `${VALIDATION_LINE}` is set only for the lint reviewer:
 `Read validation output: artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
 
-### Step 16: Aggregate Scores
+### Step 17: Aggregate Scores
 
 ```bash
 python3 scripts/score_reviews.py artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/ --json
@@ -328,7 +340,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=evaluate
 
 ## Phase 4: Iterate or Complete
 
-### Step 17: Evaluate Verdict
+### Step 18: Evaluate Verdict
 
 Read the scoring result:
 
@@ -357,7 +369,7 @@ Read the scoring result:
 - Re-dispatch missing reviewers
 - Re-aggregate
 
-### Step 18: Prepare Revision
+### Step 19: Prepare Revision
 
 Read ALL reviewer feedback from files (do not paste into your context —
 Read the files):
@@ -388,7 +400,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json version=$((VERSION
 mkdir -p artifacts/codegen-runs/${EPIC_ID}/v$((VERSION+1))
 ```
 
-### Step 19: Re-dispatch Implementer
+### Step 20: Re-dispatch Implementer
 
 Dispatch fix subagent with **model: sonnet**:
 
@@ -419,7 +431,7 @@ Agent:
     - Test summary
 ```
 
-After fix subagent completes, go to Step 12 (validate → diff → review → evaluate).
+After fix subagent completes, go to Step 13 (validate → diff → review → evaluate).
 
 ## Run Metadata
 
@@ -461,6 +473,7 @@ Artifacts are files. They never enter your context as inline text.
 
 | Artifact | Written by | Read by |
 |----------|-----------|---------|
+| strategy doc | fetch_epic.py (from Jira) | Orchestrator (spec generation) |
 | codegen-spec.md | Orchestrator | Implementer, all reviewers |
 | codegen-plan.md | Orchestrator | Implementer |
 | diff.patch | Orchestrator (git diff) | All reviewers |

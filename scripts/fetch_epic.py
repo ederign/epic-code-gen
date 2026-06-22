@@ -2,10 +2,11 @@
 """Fetch epic data from an HTML report and generate epic-task files.
 
 Takes a Jira key (e.g., RHAISTRAT-1665-E001) as parameter. Current
-implementation parses the epic creator HTML report. Future: query Jira API.
+implementation parses the epic creator HTML report. Also fetches the
+parent strategy document from Jira and saves it alongside the epic-task.
 
 Usage:
-    # Extract a single epic
+    # Extract a single epic (also fetches strategy from Jira)
     python3 scripts/fetch_epic.py RHAISTRAT-2027-E001 --report <path>
 
     # Extract all epics from a strategy
@@ -13,6 +14,9 @@ Usage:
 
     # List available strategies in a report
     python3 scripts/fetch_epic.py --report <path> --list
+
+    # Skip strategy fetch (offline mode)
+    python3 scripts/fetch_epic.py RHAISTRAT-2027-E001 --report <path> --no-strategy
 
     # Output to specific directory
     python3 scripts/fetch_epic.py RHAISTRAT-2027-E001 --report <path> \\
@@ -27,6 +31,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from artifact_utils import write_frontmatter
+from jira_utils import require_env, get_issue, adf_to_markdown
 
 
 def parse_report(html_content):
@@ -318,6 +323,45 @@ def _extract_title(epic):
     return epic["epic_id"]
 
 
+def fetch_strategy(strategy_key, output_dir="artifacts/strategies"):
+    """Fetch a strategy document from Jira and save as markdown.
+
+    Args:
+        strategy_key: e.g., RHAISTRAT-1749
+        output_dir: directory to write the file
+
+    Returns:
+        Path to the generated file, or None if Jira creds not set.
+    """
+    server, user, token = require_env()
+    if not all([server, user, token]):
+        print(f"Warning: JIRA_SERVER/JIRA_USER/JIRA_TOKEN not set, "
+              f"skipping strategy fetch for {strategy_key}", file=sys.stderr)
+        return None
+
+    issue = get_issue(server, user, token, strategy_key,
+                      fields=["summary", "description"])
+
+    summary = issue["fields"]["summary"]
+    description_adf = issue["fields"].get("description")
+
+    if not description_adf:
+        print(f"Warning: no description found for {strategy_key}",
+              file=sys.stderr)
+        return None
+
+    markdown = adf_to_markdown(description_adf)
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, f"{strategy_key}.md")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# {summary}\n\n")
+        f.write(markdown)
+
+    return path
+
+
 def list_strategies(html_content):
     """List all strategies in the report with their epic counts.
 
@@ -356,6 +400,10 @@ def main():
                         help="List available strategies in the report")
     parser.add_argument("--json", action="store_true",
                         help="Output parsed data as JSON (no files written)")
+    parser.add_argument("--no-strategy", action="store_true",
+                        help="Skip fetching strategy from Jira")
+    parser.add_argument("--strategies-dir", default="artifacts/strategies",
+                        help="Output directory for strategy files")
     args = parser.parse_args()
 
     if not os.path.isfile(args.report):
@@ -391,6 +439,11 @@ def main():
         else:
             path = generate_epic_task(epic, args.output_dir)
             print(f"Generated: {path}")
+            if not args.no_strategy:
+                strat_path = fetch_strategy(epic["strategy_key"],
+                                            args.strategies_dir)
+                if strat_path:
+                    print(f"Strategy: {strat_path}")
 
     elif re.match(r'^RHAISTRAT-\d+$', args.key):
         # All epics from a strategy
@@ -407,6 +460,10 @@ def main():
             for epic_id in sorted(matching):
                 path = generate_epic_task(matching[epic_id], args.output_dir)
                 print(f"Generated: {path}")
+            if not args.no_strategy:
+                strat_path = fetch_strategy(args.key, args.strategies_dir)
+                if strat_path:
+                    print(f"Strategy: {strat_path}")
     else:
         print(f"Error: invalid key format: {args.key}", file=sys.stderr)
         sys.exit(1)

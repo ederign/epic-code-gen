@@ -10,6 +10,8 @@ All skills read from and write to the `artifacts/` directory.
 artifacts/                          # gitignored
   epic-tasks/                       # Epic files with YAML frontmatter
     RHAISTRAT-1749-E001.md
+  strategies/                       # Strategy docs fetched from Jira
+    RHAISTRAT-1749.md
   codegen-runs/                     # Per-epic run audit trail
     RHAISTRAT-1749-E001/
       run-metadata.yaml
@@ -82,6 +84,27 @@ python3 scripts/validate_target.py <repo-path> [--json] [--checks lint,test]
 ```
 
 Supports Go, Python, TypeScript, JavaScript, Rust. Discovers commands from Makefile targets and package.json scripts.
+
+## Epic & Strategy Fetching
+
+Generate epic-task files from HTML reports and fetch strategy context from Jira:
+
+```bash
+# Fetch epic + strategy (default: also fetches strategy from Jira)
+python3 scripts/fetch_epic.py RHAISTRAT-1749-E001 --report <path>
+
+# All epics from a strategy
+python3 scripts/fetch_epic.py RHAISTRAT-1749 --report <path> --all-epics
+
+# Skip strategy fetch (offline)
+python3 scripts/fetch_epic.py RHAISTRAT-1749-E001 --report <path> --no-strategy
+```
+
+Strategy documents are fetched from Jira (RHAISTRAT project) and saved to
+`artifacts/strategies/RHAISTRAT-NNNN.md`. Requires `JIRA_SERVER`, `JIRA_USER`,
+`JIRA_TOKEN` env vars. The strategy provides business need, technical approach,
+affected components, dependencies, and staff engineer input — used as context
+during spec generation.
 
 ## Repo Readiness
 

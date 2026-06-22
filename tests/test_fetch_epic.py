@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from fetch_epic import (
     parse_report,
     generate_epic_task,
+    fetch_strategy,
     list_strategies,
     _parse_dag_dependencies,
     _parse_epic_bodies,
@@ -311,3 +313,80 @@ class TestListStrategies:
         assert len(strategies) == 1
         assert strategies[0]["key"] == "RHAISTRAT-9999"
         assert strategies[0]["epic_count"] == 2
+
+
+# ─── fetch_strategy ────────────────────────────────────────────────────────────
+
+FAKE_ADF = {
+    "type": "doc", "version": 1,
+    "content": [
+        {"type": "heading", "attrs": {"level": 2},
+         "content": [{"type": "text", "text": "Summary"}]},
+        {"type": "paragraph",
+         "content": [{"type": "text",
+                       "text": "Surface model-prompt associations."}]},
+    ],
+}
+
+
+class TestFetchStrategy:
+
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_writes_strategy_file(self, mock_env, mock_get, tmp_path):
+        mock_get.return_value = {
+            "fields": {
+                "summary": "Model-prompt associations",
+                "description": FAKE_ADF,
+            }
+        }
+        out = str(tmp_path / "strategies")
+        path = fetch_strategy("RHAISTRAT-1749", output_dir=out)
+        assert path is not None
+        assert os.path.isfile(path)
+        assert path.endswith("RHAISTRAT-1749.md")
+        content = open(path).read()
+        assert "# Model-prompt associations" in content
+        assert "Surface model-prompt associations." in content
+
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_calls_jira_with_correct_key(self, mock_env, mock_get, tmp_path):
+        mock_get.return_value = {
+            "fields": {"summary": "Title", "description": FAKE_ADF}
+        }
+        fetch_strategy("RHAISTRAT-2000", output_dir=str(tmp_path))
+        mock_get.assert_called_once_with(
+            "https://jira.example.com", "user", "token",
+            "RHAISTRAT-2000", fields=["summary", "description"])
+
+    @patch("fetch_epic.require_env", return_value=(None, None, None))
+    def test_returns_none_without_jira_creds(self, mock_env, tmp_path):
+        result = fetch_strategy("RHAISTRAT-1749",
+                                output_dir=str(tmp_path / "strats"))
+        assert result is None
+        assert not os.path.exists(tmp_path / "strats")
+
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_returns_none_without_description(self, mock_env, mock_get,
+                                              tmp_path):
+        mock_get.return_value = {
+            "fields": {"summary": "Title", "description": None}
+        }
+        result = fetch_strategy("RHAISTRAT-1749", output_dir=str(tmp_path))
+        assert result is None
+
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_creates_output_directory(self, mock_env, mock_get, tmp_path):
+        mock_get.return_value = {
+            "fields": {"summary": "Title", "description": FAKE_ADF}
+        }
+        deep_dir = str(tmp_path / "a" / "b" / "strategies")
+        path = fetch_strategy("RHAISTRAT-1749", output_dir=deep_dir)
+        assert os.path.isfile(path)
