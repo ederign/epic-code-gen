@@ -80,7 +80,7 @@ const epicBodies = {
 
 ### Description
 
-Add a PatternFly SearchInput component to filter resources.
+Update the SDK (\\`opendatahub-io/my-repo\\`) to add a PatternFly SearchInput component to filter resources.
 
 ### Acceptance Criteria
 
@@ -206,6 +206,12 @@ class TestParseEpicBodies:
     def test_body_content(self):
         bodies = _parse_epic_bodies(MINIMAL_REPORT)
         assert "PatternFly SearchInput" in bodies["RHAISTRAT-9999-E001"]
+
+    def test_body_preserves_escaped_backticks(self):
+        bodies = _parse_epic_bodies(MINIMAL_REPORT)
+        body = bodies["RHAISTRAT-9999-E001"]
+        assert "`opendatahub-io/my-repo`" in body
+        assert "Acceptance Criteria" in body
 
 
 # ─── _extract_title ──────────────────────────────────────────────────────────

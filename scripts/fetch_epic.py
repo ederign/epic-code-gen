@@ -202,7 +202,7 @@ def _parse_epic_bodies(html_content):
     bodies_text = bodies_match.group(1)
 
     entry_pattern = re.compile(
-        r'"(RHAISTRAT-\d+-E\d+)":\s*`(.*?)`',
+        r'"(RHAISTRAT-\d+-E\d+)":\s*`((?:[^`\\]|\\.)*)`,?',
         re.DOTALL,
     )
 
