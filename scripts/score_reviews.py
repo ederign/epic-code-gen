@@ -2,11 +2,10 @@
 """Aggregate reviewer scores with weights and determine pass/fail.
 
 Reads reviewer output files from a reviews directory. Each file must
-contain a YAML frontmatter block with a `scores` dict mapping dimension
-names to numeric scores (1-10).
+contain a YAML frontmatter block with a `score` field (1-10).
 
 Weights:
-  tests: 25%, intent: 25%, lint: 20%, architecture: 20%, patterns: 10%
+  architecture: 30%, tests: 30%, lint: 20%, intent: 20%
 
 Pass: weighted avg >= 8.0, no dimension < 6.0
 Near-miss: weighted avg >= 7.5, at most one dimension 5.0-5.9
@@ -25,11 +24,10 @@ import sys
 
 
 DIMENSION_WEIGHTS = {
-    "tests": 0.25,
-    "intent": 0.25,
+    "architecture": 0.30,
+    "tests": 0.30,
     "lint": 0.20,
-    "architecture": 0.20,
-    "patterns": 0.10,
+    "intent": 0.20,
 }
 
 PASS_THRESHOLD = 8.0

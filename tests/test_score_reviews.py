@@ -110,7 +110,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 8, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "pass"
@@ -121,7 +121,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 5, "intent": 5, "lint": 5, "architecture": 5, "patterns": 5,
+            "architecture": 5, "tests": 5, "lint": 5, "intent": 5,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "fail"
@@ -130,7 +130,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 4, "architecture": 9, "patterns": 9,
+            "architecture": 9, "tests": 9, "lint": 4, "intent": 9,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "fail"
@@ -139,7 +139,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 8, "intent": 8, "lint": 5.5, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 8, "lint": 5.5, "intent": 8,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "near-miss"
@@ -148,11 +148,11 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 8, "architecture": 8,
+            "architecture": 9, "tests": 9, "lint": 8,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "incomplete"
-        assert "patterns" in result["missing"]
+        assert "intent" in result["missing"]
 
     def test_nonexistent_dir(self):
         with pytest.raises(FileNotFoundError):
@@ -162,7 +162,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 10, "intent": 10, "lint": 10, "architecture": 10, "patterns": 10,
+            "architecture": 10, "tests": 10, "lint": 10, "intent": 10,
         })
         result = score_reviews(reviews_dir)
         assert result["weighted_average"] == 10.0
@@ -174,7 +174,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 8, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
         })
         _write(os.path.join(reviews_dir, "notes.md"), "Not a review")
         result = score_reviews(reviews_dir)
@@ -184,7 +184,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 8, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
         })
         _write(os.path.join(reviews_dir, "review-tests.md"), "No score here")
         result = score_reviews(reviews_dir)
@@ -194,7 +194,7 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 8, "intent": 8, "lint": 8, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 8, "lint": 8, "intent": 8,
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "pass"
@@ -209,7 +209,7 @@ class TestFormatReport:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "tests": 9, "intent": 9, "lint": 8, "architecture": 8, "patterns": 8,
+            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
         })
         result = score_reviews(reviews_dir)
         report = format_report(result)

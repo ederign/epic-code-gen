@@ -2,14 +2,14 @@
 name: epic-codegen
 description: Generate implementation code for a single epic from an approved strategy, using spec-first subagent-driven development with multi-dimensional review
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent, Skill
 ---
 
 # Epic Code Generation
 
 Generate implementation code for a single epic. Reads the epic-task file as
-the "product owner," generates a spec and plan, dispatches subagents for
-implementation, runs multi-dimensional review, and iterates until pass or
+the "product owner," generates a spec and plan, invokes Superpowers SDD for
+implementation, runs independent reviewer agents, and iterates until pass or
 exhaustion.
 
 **Core idea:** The epic strategy IS the product owner. The acceptance criteria
@@ -27,6 +27,19 @@ Parse `$ARGUMENTS` for:
 - `--dry-run` — produce diff but do not create PR
 - `--fork-owner USER` — GitHub username for fork remote
 - `--checks lint,test,typecheck` — which validation checks to run (default: all)
+
+## Autonomous Operation
+
+You ARE the human partner. The epic-task ACs are your requirements.
+
+| SDD checkpoint | Your resolution |
+|---|---|
+| Pre-flight plan conflicts | Resolve against ACs. ACs win over task text. |
+| BLOCKED | Answer from epic body + strategy + repo context. Escalate model tier before giving up. Do NOT stop for user input. |
+| NEEDS_CONTEXT | Answer from epic/strategy/repo. You hold all context. |
+| Plan-mandated findings | ACs are authoritative. AC requires it → dismiss finding. AC silent → accept finding. |
+| Finishing | Do NOT invoke `finishing-a-development-branch`. Proceed to Phase 3. |
+| Implementer questions | Answer from spec, epic body, strategy, repo context. |
 
 ## Phase 1: Spec & Plan Generation
 
@@ -146,11 +159,15 @@ If any AC is unmapped, stop and report the gap.
 Create `artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`:
 
 ```markdown
-# Plan: ${EPIC_ID}
+# ${EPIC_ID} Implementation Plan
 
-> For subagent: follow task-by-task. Each task has checkbox steps.
-> Emphasis: TDD (write test first), YAGNI, DRY.
-> Reference spec: codegen-spec.md
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development to implement this plan task-by-task.
+> Steps use checkbox syntax for tracking.
+
+**Goal:** [one sentence from epic ACs]
+**Architecture:** [from strategy technical approach]
+**Tech Stack:** [from target repo detection]
 
 ## Global Constraints
 [From spec + target repo CLAUDE.md: version floors, naming rules, platform
@@ -197,95 +214,49 @@ cd .target-repo && git rev-parse HEAD
 
 Save as `BASE_SHA` — used for diff generation later.
 
-### Step 11: Dispatch Implementer Subagent
+### Step 11: Initialize SDD Workspace
 
-Dispatch via Agent tool with **model: sonnet** (mechanical execution):
-
-```
-Agent:
-  description: "Implement ${EPIC_ID}"
-  model: sonnet
-  prompt: |
-    You are implementing code changes for epic ${EPIC_ID}.
-
-    ## Your Requirements
-
-    Read the codegen plan: artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
-    Read the codegen spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    Read the target repo conventions: .target-repo/CLAUDE.md
-
-    ## Working Directory
-
-    Work in: .target-repo/
-
-    ## Your Job
-
-    Follow the plan task-by-task. For each task:
-    1. Read the reference implementation named in the task
-    2. Write a failing test (TDD)
-    3. Run the test to confirm it fails
-    4. Write the minimal implementation
-    5. Run the test to confirm it passes
-    6. Commit with a descriptive message
-
-    ## Rules
-
-    - Implement EXACTLY what the spec says. Nothing more (YAGNI).
-    - Follow existing patterns from the target repo.
-    - Every commit must leave tests passing.
-    - Sign off commits: git commit --signoff
-
-    ## Report
-
-    Write your report to: artifacts/codegen-runs/${EPIC_ID}/v1/implementer-report.md
-
-    Include: what you implemented, test results with TDD evidence, files
-    changed, self-review findings, any concerns.
-
-    Return ONLY (under 15 lines):
-    - Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-    - Commits created (short SHA + subject)
-    - One-line test summary
-    - Concerns if any
-```
-
-### Step 12: Handle Implementer Response
-
-**DONE:** proceed to validation (Step 12).
-
-**DONE_WITH_CONCERNS:** read concerns. If about correctness or scope, address
-before proceeding. If observations only, note and proceed.
-
-**NEEDS_CONTEXT:** provide missing context, re-dispatch with same model.
-
-**BLOCKED:** assess the blocker:
-1. Context problem → provide more context, re-dispatch
-2. Task too complex → re-dispatch with model: opus
-3. Task too large → break it down, re-dispatch subtasks
-4. Plan wrong → stop, report to user
-
-### Step 13: Validate Target Repo
+Run the SDD workspace setup in the target repo:
 
 ```bash
-python3 scripts/validate_target.py .target-repo/ --json
+cd .target-repo && bash ../superpowers/scripts/sdd-workspace
 ```
 
-Record validation results.
+This creates `.superpowers/sdd/` with the progress ledger.
 
-### Step 14: Generate Diff
+### Step 12: Invoke SDD
+
+Invoke the Superpowers subagent-driven-development skill:
+
+```
+Skill("superpowers:subagent-driven-development")
+```
+
+SDD reads the plan file (`codegen-plan.md`), recognizes the plan header, and
+runs its full pipeline:
+1. Creates todos from plan tasks
+2. Per task: dispatches implementer → task review → fix loops
+3. Updates progress ledger at `.target-repo/.superpowers/sdd/progress.md`
+4. Runs final whole-branch code review
+
+**Override:** when SDD reaches `finishing-a-development-branch`, do NOT invoke
+that skill. Proceed directly to Step 13.
+
+### Step 13: Save Version Artifacts
+
+After SDD completes:
 
 ```bash
 cd .target-repo && git diff ${BASE_SHA}..HEAD > ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
 ```
 
-The diff is a FILE — reviewers Read it, it never enters orchestrator context.
-
-### Step 15: Save Version Artifacts
+```bash
+python3 scripts/validate_target.py .target-repo/ --json > artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+```
 
 Save to `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/`:
-- `diff.patch` — the code changes
+- `diff.patch` — the code changes (FILE — reviewers Read it, never inline)
 - `validation.json` — validate_target.py output
-- `implementer-report.md` — the implementer's report
 
 Update state:
 ```bash
@@ -294,38 +265,36 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=review versi
 
 ## Phase 3: Multi-Dimensional Review
 
-### Step 16: Dispatch 5 Reviewer Subagents
+### Step 14: Dispatch 4 Reviewer Agents
 
-Dispatch in parallel via 5 Agent tool calls, all with **model: sonnet**:
+Dispatch in parallel via 4 Agent tool calls, all with **model: sonnet**.
 
-For each dimension (tests, intent, lint, architecture, patterns):
+Each reviewer is a standalone agent definition in `agents/`. The orchestrator
+dispatches them — it does not construct reviewer prompts inline.
+
+For each dimension (architecture, tests, lint, intent):
 
 ```
 Agent:
   description: "Review ${EPIC_ID} — ${DIMENSION}"
   model: sonnet
+  agentType: "${DIMENSION}-reviewer"
   prompt: |
-    You are reviewing the ${DIMENSION} dimension of code changes for ${EPIC_ID}.
+    Review the code changes for ${EPIC_ID}.
 
-    Read your rubric: rubrics/${DIMENSION}-review.md
-    Read the diff: artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-    Read the spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    ${VALIDATION_LINE}
-
-    Write your review to: artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-${DIMENSION}.md
-
-    Your review MUST include a YAML frontmatter block with your score:
-    ---
-    score: N
-    ---
-
-    Follow your rubric's output format exactly.
+    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-${DIMENSION}.md
+    ${EXTRA_FILES}
 ```
 
-Where `${VALIDATION_LINE}` is set only for the lint reviewer:
-`Read validation output: artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
+Where `${EXTRA_FILES}` is set per dimension:
+- **architecture:** `CLAUDE_MD_FILE = .target-repo/CLAUDE.md`
+- **tests:** (none — reads spec ACs)
+- **lint:** `VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
+- **intent:** (none — reads spec ACs)
 
-### Step 17: Aggregate Scores
+### Step 15: Aggregate Scores
 
 ```bash
 python3 scripts/score_reviews.py artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/ --json
@@ -340,7 +309,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=evaluate
 
 ## Phase 4: Iterate or Complete
 
-### Step 18: Evaluate Verdict
+### Step 16: Evaluate Verdict
 
 Read the scoring result:
 
@@ -356,7 +325,7 @@ Read the scoring result:
 - Treat same as fail — iterate to fix
 
 **fail** and version < max_iterations:
-- Proceed to Step 18 (revision)
+- Proceed to Step 17 (revision)
 
 **fail** and version >= max_iterations:
 - Find best version (highest weighted average across all versions)
@@ -369,15 +338,14 @@ Read the scoring result:
 - Re-dispatch missing reviewers
 - Re-aggregate
 
-### Step 19: Prepare Revision
+### Step 17: Prepare Revision
 
 Read ALL reviewer feedback from files (do not paste into your context —
 Read the files):
-- `v${VERSION}/review-tests.md`
-- `v${VERSION}/review-intent.md`
-- `v${VERSION}/review-lint.md`
 - `v${VERSION}/review-architecture.md`
-- `v${VERSION}/review-patterns.md`
+- `v${VERSION}/review-tests.md`
+- `v${VERSION}/review-lint.md`
+- `v${VERSION}/review-intent.md`
 
 Adjudicate findings (judgment — you stay at opus):
 - Real findings: confirmed issues that need fixing
@@ -400,7 +368,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json version=$((VERSION
 mkdir -p artifacts/codegen-runs/${EPIC_ID}/v$((VERSION+1))
 ```
 
-### Step 20: Re-dispatch Implementer
+### Step 18: Re-dispatch Fix Subagent
 
 Dispatch fix subagent with **model: sonnet**:
 
@@ -431,7 +399,8 @@ Agent:
     - Test summary
 ```
 
-After fix subagent completes, go to Step 13 (validate → diff → review → evaluate).
+After fix subagent completes, go to Step 13 (save artifacts → review →
+evaluate). Do NOT re-enter SDD for targeted fixes.
 
 ## Run Metadata
 
@@ -447,11 +416,10 @@ status: completed|exhausted|failed|error
 versions: <count>
 final_score: <weighted avg of best version>
 scores_by_dimension:
-  tests: N
-  intent: N
-  lint: N
   architecture: N
-  patterns: N
+  tests: N
+  lint: N
+  intent: N
 started_at: <timestamp>
 ```
 
@@ -460,12 +428,27 @@ started_at: <timestamp>
 | Role | Model | Rationale |
 |------|-------|-----------|
 | Orchestrator (you) | opus | Judgment: adjudication, false positive detection, finding prioritization |
-| Implementer | sonnet | Mechanical: follows plan task-by-task |
+| SDD implementers | sonnet | Managed by SDD — per-task mechanical execution |
+| SDD task reviewers | sonnet | Managed by SDD — per-task spec+quality check |
 | Fix subagent | sonnet | Mechanical: applies specific fixes |
-| Reviewers (all 5) | sonnet | Task-scoped: scores against rubric |
+| Reviewer agents (all 4) | sonnet | Task-scoped: scores against agent definition |
 
 **Always specify model explicitly in every Agent dispatch.** Omitting model
 inherits session model (opus) and silently wastes cost.
+
+## Review Dimensions
+
+4 independent reviewer agents, each a standalone definition in `agents/`:
+
+| Dimension | Agent | Weight | Focus |
+|-----------|-------|--------|-------|
+| architecture | `agents/architecture-reviewer.md` | 30% | Repo conventions, structural fit, integration quality |
+| tests | `agents/tests-reviewer.md` | 30% | AC coverage, TDD evidence, edge cases, assertion quality |
+| lint | `agents/lint-reviewer.md` | 20% | Lint/typecheck/build pass, code style, error handling |
+| intent | `agents/intent-reviewer.md` | 20% | AC alignment, scope check, semantic correctness |
+
+Pluggable: add/remove/replace a dimension = add/remove an agent file +
+update score_reviews.py weights.
 
 ## File Handoffs
 
@@ -474,20 +457,29 @@ Artifacts are files. They never enter your context as inline text.
 | Artifact | Written by | Read by |
 |----------|-----------|---------|
 | strategy doc | fetch_epic.py (from Jira) | Orchestrator (spec generation) |
-| codegen-spec.md | Orchestrator | Implementer, all reviewers |
-| codegen-plan.md | Orchestrator | Implementer |
-| diff.patch | Orchestrator (git diff) | All reviewers |
-| validation.json | validate_target.py | Lint reviewer |
-| review-*.md | Reviewers | Orchestrator (for adjudication only) |
+| codegen-spec.md | Orchestrator | SDD implementers, all reviewer agents |
+| codegen-plan.md | Orchestrator | SDD (reads plan, dispatches tasks) |
+| task-N-brief.md | SDD task-brief script | SDD implementer |
+| task-N-report.md | SDD implementer | SDD task reviewer |
+| review-package diff | SDD review-package script | SDD task reviewer, final reviewer |
+| progress.md | SDD | SDD on resume |
+| diff.patch | Orchestrator (git diff) | All reviewer agents |
+| validation.json | validate_target.py | Lint reviewer agent |
+| review-*.md | Reviewer agents | Orchestrator (for adjudication only) |
 | revision-notes.md | Orchestrator | Fix subagent |
-| implementer-report.md | Implementer/Fix subagent | Orchestrator |
 
 ## State Recovery
 
-If context compresses mid-run, recover from state file:
+If context compresses mid-run, recover from BOTH:
 
+1. State file:
 ```bash
 python3 scripts/state.py read tmp/epic-codegen-${EPIC_ID}.json
+```
+
+2. SDD progress ledger:
+```
+.target-repo/.superpowers/sdd/progress.md
 ```
 
 Resume at the phase and version recorded. Check `artifacts/codegen-runs/${EPIC_ID}/`
@@ -498,7 +490,7 @@ Do not re-dispatch work that artifacts show as complete.
 
 - Clone fails → report error, stop
 - Readiness below threshold → report gap, stop
-- Implementer BLOCKED after retry → report to user, stop
+- SDD reports BLOCKED after retry → report to user, stop
 - All reviewers fail to produce scores → report error, stop
 - File write fails → report error, stop
 
@@ -514,6 +506,6 @@ In all error cases: update state to `status=error`, update epic-task to
 - Do not modify files outside `.target-repo/` and `artifacts/`
 - Sign off all commits: `git commit --signoff`
 - Never dispatch implementers in parallel (conflicts)
-- Never skip review — every version gets all 5 dimensions
+- Never skip review — every version gets all 4 dimensions
 - Never dismiss a finding without stating the reasoning
 - Always specify model in Agent dispatches

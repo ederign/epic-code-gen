@@ -20,12 +20,10 @@ artifacts/                          # gitignored
       v1/                           # Version 1 artifacts
         diff.patch
         validation.json
-        implementer-report.md
-        review-tests.md
-        review-intent.md
-        review-lint.md
         review-architecture.md
-        review-patterns.md
+        review-tests.md
+        review-lint.md
+        review-intent.md
         scores.json
       v2/                           # Revision after review
         revision-notes.md
@@ -137,17 +135,30 @@ Aggregate reviewer scores with weights and determine pass/fail:
 python3 scripts/score_reviews.py <reviews-dir> [--json]
 ```
 
-Weights: tests 25%, intent 25%, lint 20%, architecture 20%, patterns 10%.
+Weights: architecture 30%, tests 30%, lint 20%, intent 20%.
 Verdict: pass (>=8.0, no dim <6.0), near-miss (>=7.5), fail, incomplete.
 
-Reviewer rubrics live in `rubrics/` — one per dimension. Each defines scoring
-criteria (1-10), calibration tables, and output format.
+Reviewer agents live in `agents/` — one per dimension. Each is a standalone
+agent definition (assess-strat pattern) with frontmatter, scoring criteria
+(1-10), calibration tables, and output format.
+
+## Superpowers Integration
+
+Phase 2 uses the Superpowers plugin's `subagent-driven-development` (SDD)
+skill for implementation. SDD handles: per-task implementer dispatch,
+per-task review, fix loops, progress ledger, final code review.
+
+The orchestrator IS the human partner — epic ACs resolve all SDD checkpoints
+autonomously. SDD artifacts land in `.target-repo/.superpowers/sdd/`.
+
+SDD scripts (permitted in settings.json):
+- `task-brief` — extract task text to file for implementer dispatch
+- `review-package` — generate diff file for reviewer
+- `sdd-workspace` — create `.superpowers/sdd/` directory
 
 ## Code Generation Workflow
 
 Use `/epic-codegen EPIC_ID [--dry-run] [--max-iterations N] [--fork-owner USER]`
-
-The skill automates the Superpowers methodology:
 
 ```
 Phase 1 — Spec & Plan:
@@ -155,25 +166,25 @@ Phase 1 — Spec & Plan:
   2. Clone target repo, validate readiness (>=8/12)
   3. Pattern discovery in target repo
   4. Generate codegen-spec.md (AC-to-component mapping)
-  5. Generate codegen-plan.md (task-by-task with TDD steps)
+  5. Generate codegen-plan.md (Superpowers plan format, TDD steps)
 
-Phase 2 — Subagent-Driven Development:
-  6. Dispatch implementer subagent (model: sonnet)
-  7. Validate: lint, typecheck, tests
-  8. Generate diff file
+Phase 2 — Subagent-Driven Development (Superpowers SDD):
+  6. Record base SHA, init SDD workspace
+  7. Invoke Skill("superpowers:subagent-driven-development")
+  8. Save version artifacts (diff, validation)
 
 Phase 3 — Multi-Dimensional Review:
-  9. Dispatch 5 reviewer subagents in parallel (model: sonnet)
+  9. Dispatch 4 reviewer agents in parallel (model: sonnet)
   10. Aggregate weighted scores
 
 Phase 4 — Iterate or Complete:
   11. Pass (>=8.0): save final diff
-  12. Fail: adjudicate findings, write revision notes, re-dispatch
+  12. Fail: adjudicate findings, write revision notes, re-dispatch fix agent
   13. Exhausted: report best version
 ```
 
-Model selection: opus for orchestrator (judgment), sonnet for implementers
-and reviewers (mechanical). Always specify model explicitly in dispatches.
+Model selection: opus for orchestrator (judgment), sonnet for SDD implementers
+and reviewer agents (mechanical). Always specify model explicitly in dispatches.
 
 All artifacts saved to `artifacts/codegen-runs/<EPIC_ID>/v<N>/`.
-State persisted via `tmp/epic-codegen-<EPIC_ID>.json`.
+State persisted via `tmp/epic-codegen-<EPIC_ID>.json` + SDD progress ledger.
