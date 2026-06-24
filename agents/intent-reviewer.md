@@ -15,7 +15,11 @@ Read these files (do not ask for them inline):
 
 1. **Diff file:** `DIFF_FILE` — the code changes under review
 2. **Spec file:** `SPEC_FILE` — the codegen spec with acceptance criteria
-3. **Epic ACs:** listed in the spec's Components section
+3. **Epic file:** `EPIC_FILE` — the original epic-task with raw acceptance criteria
+
+The spec is derived from the epic. Your job is to verify against the
+**epic's original ACs**, not just the spec's interpretation. If the spec
+missed or altered an AC, that is a Critical finding.
 
 ## Your Review Should Contain
 
@@ -56,8 +60,9 @@ Read these files (do not ask for them inline):
 - Do not mutate the working tree, index, or HEAD.
 - Do not read files outside the diff unless checking a concrete named risk.
 - Cite file:line for every finding.
-- The spec's acceptance criteria are the source of truth for intent, not the
-  plan's task decomposition. If a plan task deviates from the AC, flag it.
+- The epic's acceptance criteria are the ultimate source of truth for intent.
+  The spec interprets them — if the spec missed or altered an AC, flag it.
+  If a plan task deviates from the AC, flag it.
 
 ## Output Format
 

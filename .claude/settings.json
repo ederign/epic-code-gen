@@ -7,6 +7,7 @@
       "Bash(python3 scripts/validate_target.py *)",
       "Bash(python3 scripts/clone_target.py *)",
       "Bash(python3 scripts/score_reviews.py *)",
+      "Bash(python3 scripts/run_index.py *)",
       "Bash(python3 scripts/fetch_epic.py *)",
       "Bash(*/scripts/task-brief *)",
       "Bash(*/scripts/review-package *)",

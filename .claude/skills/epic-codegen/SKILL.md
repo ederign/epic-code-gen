@@ -267,7 +267,7 @@ python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=review versi
 
 ### Step 14: Dispatch 4 Reviewer Agents
 
-Dispatch in parallel via 4 Agent tool calls, all with **model: sonnet**.
+Dispatch in parallel via 4 Agent tool calls.
 
 Each reviewer is a standalone agent definition in `agents/`. The orchestrator
 dispatches them — it does not construct reviewer prompts inline.
@@ -292,7 +292,7 @@ Where `${EXTRA_FILES}` is set per dimension:
 - **architecture:** `CLAUDE_MD_FILE = .target-repo/CLAUDE.md`
 - **tests:** (none — reads spec ACs)
 - **lint:** `VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
-- **intent:** (none — reads spec ACs)
+- **intent:** `EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md` (verifies against original ACs, not just the spec's interpretation)
 
 ### Step 15: Aggregate Scores
 
@@ -370,7 +370,7 @@ mkdir -p artifacts/codegen-runs/${EPIC_ID}/v$((VERSION+1))
 
 ### Step 18: Re-dispatch Fix Subagent
 
-Dispatch fix subagent with **model: sonnet**:
+Dispatch fix subagent:
 
 ```
 Agent:
@@ -423,18 +423,22 @@ scores_by_dimension:
 started_at: <timestamp>
 ```
 
+After writing run-metadata, update the run index:
+
+```bash
+python3 scripts/run_index.py artifacts/codegen-runs/
+```
+
+This writes `artifacts/codegen-runs/index.json` — a structured aggregate
+of all runs for dashboard consumption.
+
 ## Model Selection
 
-| Role | Model | Rationale |
-|------|-------|-----------|
-| Orchestrator (you) | opus | Judgment: adjudication, false positive detection, finding prioritization |
-| SDD implementers | sonnet | Managed by SDD — per-task mechanical execution |
-| SDD task reviewers | sonnet | Managed by SDD — per-task spec+quality check |
-| Fix subagent | sonnet | Mechanical: applies specific fixes |
-| Reviewer agents (all 4) | sonnet | Task-scoped: scores against agent definition |
+All agents run on opus (inherited from session model). No model overrides.
 
-**Always specify model explicitly in every Agent dispatch.** Omitting model
-inherits session model (opus) and silently wastes cost.
+When we move to cost optimization, downgrade mechanical roles (implementer,
+fix subagent) to sonnet first. Keep opus for judgment roles (orchestrator,
+reviewers) longest.
 
 ## Review Dimensions
 
@@ -508,4 +512,4 @@ In all error cases: update state to `status=error`, update epic-task to
 - Never dispatch implementers in parallel (conflicts)
 - Never skip review — every version gets all 4 dimensions
 - Never dismiss a finding without stating the reasoning
-- Always specify model in Agent dispatches
+- All agents inherit opus from session (no model overrides during validation)

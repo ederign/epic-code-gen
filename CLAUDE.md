@@ -127,6 +127,19 @@ bash scripts/fetch-architecture-context.sh /path/to/local/architecture-context
 
 After every code change, run `make test-unit` for script changes. Run `make test` for the full suite before pushing. A change is not done until tests pass.
 
+## Run Index
+
+Aggregate all run outcomes into a single file for dashboard consumption:
+
+```bash
+python3 scripts/run_index.py artifacts/codegen-runs/
+python3 scripts/run_index.py artifacts/codegen-runs/ --json
+```
+
+Scans `*/run-metadata.yaml`, writes `artifacts/codegen-runs/index.json` with
+all runs, total count, and summary by status (completed/exhausted/error).
+Called automatically at the end of every `/epic-codegen` run.
+
 ## Review Score Aggregation
 
 Aggregate reviewer scores with weights and determine pass/fail:
@@ -183,8 +196,9 @@ Phase 4 — Iterate or Complete:
   13. Exhausted: report best version
 ```
 
-Model selection: opus for orchestrator (judgment), sonnet for SDD implementers
-and reviewer agents (mechanical). Always specify model explicitly in dispatches.
+Model selection: all agents run on opus (inherited from session). No model
+overrides during validation phase. Downgrade mechanical roles to sonnet later
+when optimizing cost.
 
 All artifacts saved to `artifacts/codegen-runs/<EPIC_ID>/v<N>/`.
 State persisted via `tmp/epic-codegen-<EPIC_ID>.json` + SDD progress ledger.
