@@ -318,27 +318,29 @@ class TestProcessStrategy:
 class TestInvokeCodegen:
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_direct_mode_command(self, mock_run):
+    def test_default_uses_run_claude_sh(self, mock_run):
         mock_run.return_value = mock.MagicMock(returncode=0)
         args = _make_args()
         result = invoke_codegen("RHOAIENG-72103", args)
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "claude"
-        assert "/epic-codegen RHOAIENG-72103" in cmd
-        assert "--dangerously-skip-permissions" in cmd
+        assert cmd[0] == "bash"
+        assert cmd[1].endswith("run-claude.sh")
+        assert "/epic-codegen RHOAIENG-72103" in cmd[2]
+        env = mock_run.call_args[1].get("env", {})
+        assert "LOG_FILE" in env
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_ci_mode_command(self, mock_run):
+    def test_custom_run_script(self, mock_run):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        args = _make_args(run_script="ci-scripts/run-claude.sh")
+        args = _make_args(run_script="custom/run.sh")
         result = invoke_codegen("RHOAIENG-72103", args)
 
         assert result is True
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "bash"
-        assert cmd[1] == "ci-scripts/run-claude.sh"
+        assert cmd[1] == "custom/run.sh"
         assert "/epic-codegen RHOAIENG-72103" in cmd[2]
 
     @mock.patch("run_pipeline.subprocess.run")

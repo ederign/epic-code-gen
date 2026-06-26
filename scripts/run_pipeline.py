@@ -306,14 +306,9 @@ def invoke_codegen(epic_id, args):
     if args.fork_owner:
         skill_args += f" --fork-owner {args.fork_owner}"
 
-    if args.run_script:
-        cmd = ["bash", args.run_script, skill_args]
-    else:
-        cmd = [
-            "claude", "-p", skill_args,
-            "--dangerously-skip-permissions",
-            "--output-format", "text",
-        ]
+    run_script = args.run_script or os.path.join(
+        os.path.dirname(_SCRIPT_DIR), "ci-scripts", "run-claude.sh")
+    cmd = ["bash", run_script, skill_args]
 
     os.makedirs(args.log_dir, exist_ok=True)
     log_path = os.path.join(args.log_dir, f"{epic_id}.log")
@@ -322,15 +317,16 @@ def invoke_codegen(epic_id, args):
     print(f"  Command: {' '.join(cmd)}")
     print(f"  Log: {log_path}")
 
+    env = os.environ.copy()
+    env["LOG_FILE"] = log_path
+
     try:
-        with open(log_path, "w", encoding="utf-8") as log_file:
-            result = subprocess.run(
-                cmd,
-                cwd=os.getcwd(),
-                timeout=args.timeout,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-            )
+        result = subprocess.run(
+            cmd,
+            cwd=os.getcwd(),
+            timeout=args.timeout,
+            env=env,
+        )
         if result.returncode == 0:
             print(f"  Result: SUCCESS")
             return True
