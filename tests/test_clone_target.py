@@ -16,6 +16,7 @@ from clone_target import (
     _url_matches,
     _ensure_branch,
     _setup_fork_remote,
+    _configure_git_identity,
 )
 
 
@@ -177,6 +178,42 @@ class TestEnsureBranch:
             cwd=repo, capture_output=True, text=True,
         )
         assert out.stdout.strip() == "epic/TEST-001"
+
+
+# ─── Git Identity ───────────────────────────────────────────────────────────
+
+class TestConfigureGitIdentity:
+
+    def test_sets_name_and_email_from_token(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        mock_user = {"login": "dora-the-ai-coder", "email": "dora@example.com"}
+
+        with patch("github_utils.get_authenticated_user", return_value=mock_user):
+            _configure_git_identity(repo, "fake-token")
+
+        name = subprocess.run(
+            ["git", "config", "user.name"], cwd=repo,
+            capture_output=True, text=True,
+        )
+        email = subprocess.run(
+            ["git", "config", "user.email"], cwd=repo,
+            capture_output=True, text=True,
+        )
+        assert name.stdout.strip() == "dora-the-ai-coder"
+        assert email.stdout.strip() == "dora@example.com"
+
+    def test_falls_back_to_noreply_email(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        mock_user = {"login": "dora-the-ai-coder", "email": None}
+
+        with patch("github_utils.get_authenticated_user", return_value=mock_user):
+            _configure_git_identity(repo, "fake-token")
+
+        email = subprocess.run(
+            ["git", "config", "user.email"], cwd=repo,
+            capture_output=True, text=True,
+        )
+        assert email.stdout.strip() == "dora-the-ai-coder@users.noreply.github.com"
 
 
 # ─── Fork Remote ─────────────────────────────────────────────────────────────

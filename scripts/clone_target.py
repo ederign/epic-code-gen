@@ -98,6 +98,9 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
 
     _run_git(["git", "clone", clone_url, dest])
 
+    if token:
+        _configure_git_identity(dest, token)
+
     _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
     if fork_owner:
@@ -124,6 +127,15 @@ def _extract_slug(url):
         if len(parts) >= 2:
             return f"{parts[0]}/{parts[1]}"
     return None
+
+
+def _configure_git_identity(dest, token):
+    """Set git user.name and user.email from the GitHub token owner."""
+    user = github_utils.get_authenticated_user(token)
+    login = user["login"]
+    email = user.get("email") or f"{login}@users.noreply.github.com"
+    _run_git(["git", "config", "user.name", login], cwd=dest)
+    _run_git(["git", "config", "user.email", email], cwd=dest)
 
 
 def _ensure_branch(dest, branch):
