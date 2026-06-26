@@ -21,7 +21,21 @@ parser.add_argument(
     "--claude-pid", type=int, default=0,
     help="PID of Claude Code process to kill on completion",
 )
+parser.add_argument(
+    "--log-file", default=None,
+    help="Write output to this file (flushed per line)",
+)
 args = parser.parse_args()
+
+_log_fh = open(args.log_file, "w", encoding="utf-8") if args.log_file else None
+
+
+_orig_print = print
+def print(*a, **kw):
+    _orig_print(*a, **kw)
+    if _log_fh:
+        kw.pop("flush", None)
+        _orig_print(*a, **kw, file=_log_fh, flush=True)
 
 # ANSI colors (GitLab CI supports these)
 if args.no_color:

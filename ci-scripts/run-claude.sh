@@ -20,11 +20,12 @@ claude -p "${1:?Usage: $0 <prompt>}" \
   --verbose 2>"${LOG_DIR:-/tmp}/claude-stderr.log" > "$claude_fifo" &
 claude_pid=$!
 
+log_args=()
 if [ -n "${LOG_FILE:-}" ]; then
-  python3 -u "$ci_scripts/stream-claude.py" --claude-pid "$claude_pid" < "$claude_fifo" | tee "$LOG_FILE"
-else
-  python3 -u "$ci_scripts/stream-claude.py" --claude-pid "$claude_pid" < "$claude_fifo"
+  log_args+=(--log-file "$LOG_FILE")
 fi
+
+python3 -u "$ci_scripts/stream-claude.py" --claude-pid "$claude_pid" "${log_args[@]}" < "$claude_fifo"
 stream_rc=$?
 
 # Safety net: kill Claude if still running
