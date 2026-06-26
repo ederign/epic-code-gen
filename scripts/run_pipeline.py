@@ -39,7 +39,7 @@ from fetch_jira_epics import (
     is_eligible,
     issue_to_epic_data,
 )
-from jira_utils import require_env
+from jira_utils import do_transition, get_transitions, require_env
 
 PROCESSED = "processed"
 SKIPPED = "skipped"
@@ -48,6 +48,41 @@ FAILED = "failed"
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
+
+
+def transition_issue(server, user, token, issue_key, target_status):
+    """Transition a Jira issue to the given status.
+
+    Discovers available transitions and matches by name (case-insensitive).
+
+    Returns:
+        tuple: (success: bool, from_status: str) — from_status is the
+        current status name before transition, or empty string on failure.
+    """
+    try:
+        transitions = get_transitions(server, user, token, issue_key)
+    except Exception as e:
+        print(f"  Warning: failed to get transitions for {issue_key}: {e}",
+              file=sys.stderr)
+        return False, ""
+
+    target_lower = target_status.lower()
+    for t in transitions:
+        to_name = t.get("to", {}).get("name", "")
+        if to_name.lower() == target_lower:
+            try:
+                do_transition(server, user, token, issue_key, t["id"])
+                print(f"  {issue_key}: transitioned to '{to_name}'")
+                return True, to_name
+            except Exception as e:
+                print(f"  Warning: transition to '{to_name}' failed "
+                      f"for {issue_key}: {e}", file=sys.stderr)
+                return False, ""
+
+    available = [t.get("to", {}).get("name", "?") for t in transitions]
+    print(f"  Warning: no '{target_status}' transition for {issue_key} "
+          f"(available: {available})", file=sys.stderr)
+    return False, ""
 
 
 def load_repo_mapping(path=None):
@@ -233,7 +268,7 @@ def process_strategy(strategy_key, server, user, token, args):
     issues = fetch_children(server, user, token, strategy_key)
     if not issues:
         print(f"  No child work items found for {strategy_key}")
-        return [], {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}
+        return [], {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}, {}
 
     print(f"  Found {len(issues)} child work items")
 
@@ -258,6 +293,7 @@ def process_strategy(strategy_key, server, user, token, args):
         fetch_strategy(strategy_key, strategies_dir)
 
     results = {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}
+    transitions_log = {}
     completed_keys = set()
     handled_keys = set()
 
@@ -278,11 +314,24 @@ def process_strategy(strategy_key, server, user, token, args):
             continue
 
         print(f"  {epic_id}: ELIGIBLE — starting codegen")
+        epic_transitions = []
+
+        ok, _ = transition_issue(
+            server, user, token, epic_id, "In Progress")
+        epic_transitions.append({
+            "to": "In Progress", "success": ok})
+
         success = invoke_codegen(epic_id, args)
         if success:
             results[PROCESSED].append((epic_id, "codegen completed"))
+            ok, _ = transition_issue(
+                server, user, token, epic_id, "In Review")
+            epic_transitions.append({
+                "to": "In Review", "success": ok})
         else:
             results[FAILED].append((epic_id, "codegen failed"))
+
+        transitions_log[epic_id] = epic_transitions
         handled_keys.add(epic_id)
 
     for key in all_epics_by_key:
@@ -294,14 +343,14 @@ def process_strategy(strategy_key, server, user, token, args):
             results[BLOCKED].append((key, reason))
             print(f"  {key}: BLOCKED ({reason})")
 
-    return epics, results
+    return epics, results, transitions_log
 
 
 def build_run_log(all_results, start_time):
     """Build structured execution log for dashboard consumption.
 
     Args:
-        all_results: dict of {strategy_key: (epics_list, results_dict)}
+        all_results: dict of {strategy_key: (epics_list, results_dict, transitions_log)}
         start_time: datetime when the run started
 
     Returns:
@@ -311,7 +360,7 @@ def build_run_log(all_results, start_time):
     run_id = start_time.strftime("%Y-%m-%dT%H-%M-%SZ")
 
     strategies = {}
-    for strategy_key, (epics, results) in all_results.items():
+    for strategy_key, (epics, results, transitions_log) in all_results.items():
         epics_by_key = {e["epic_id"]: e for e in epics}
 
         action_map = {}
@@ -337,6 +386,7 @@ def build_run_log(all_results, start_time):
                 "reason": detail,
                 "dependencies": epic.get("dependencies") or [],
                 "blocks": epic.get("blocks") or [],
+                "transitions": transitions_log.get(eid, []),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -378,7 +428,7 @@ def print_summary(all_results):
     print(f"{'='*60}")
 
     total_p = total_s = total_b = total_f = 0
-    for strategy_key, (epics, results) in all_results.items():
+    for strategy_key, (epics, results, _) in all_results.items():
         p = len(results[PROCESSED])
         s = len(results[SKIPPED])
         b = len(results[BLOCKED])
@@ -448,9 +498,9 @@ def main(argv=None):
 
     all_results = {}
     for strategy_key in args.keys:
-        epics, results = process_strategy(
+        epics, results, transitions_log = process_strategy(
             strategy_key, server, user, token, args)
-        all_results[strategy_key] = (epics, results)
+        all_results[strategy_key] = (epics, results, transitions_log)
 
         if not args.no_report and epics:
             report_path = generate_status_report(
@@ -465,7 +515,7 @@ def main(argv=None):
 
     has_failures = any(
         results[FAILED]
-        for _, (_, results) in all_results.items()
+        for _, (_, results, _) in all_results.items()
     )
     return 1 if has_failures else 0
 
