@@ -37,7 +37,7 @@ _CHILD_FIELDS = [
     "issuelinks", "components",
 ]
 
-_DONE_STATUSES = {"Done", "Closed", "Resolved"}
+DONE_STATUSES = {"Done", "Closed", "Resolved"}
 
 
 def fetch_children(server, user, token, parent_key):
@@ -153,14 +153,14 @@ def is_eligible(epic_data, all_epics_by_key):
         (eligible: bool, reason: str)
     """
     jira_status = epic_data.get("jira_status", "")
-    if jira_status in _DONE_STATUSES:
+    if jira_status in DONE_STATUSES:
         return False, "Already done"
 
     dependencies = epic_data.get("dependencies") or []
     unresolved = []
     for dep_key in dependencies:
         dep = all_epics_by_key.get(dep_key)
-        if dep and dep.get("jira_status") not in _DONE_STATUSES:
+        if dep and dep.get("jira_status") not in DONE_STATUSES:
             unresolved.append(dep_key)
 
     if unresolved:
@@ -195,7 +195,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports"):
         eligible, reason = is_eligible(epic, epics_by_key)
         if eligible:
             eligible_count += 1
-        elif jira_status in _DONE_STATUSES:
+        elif jira_status in DONE_STATUSES:
             done_count += 1
         else:
             blocked_count += 1
@@ -248,11 +248,11 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
         key = epic["epic_id"]
         node_id = _mermaid_id(key)
         jira_status = epic.get("jira_status", "")
-        if jira_status in _DONE_STATUSES:
+        if jira_status in DONE_STATUSES:
             style = "done"
         elif any(d for d in (epic.get("dependencies") or [])
                  if d in {e["epic_id"] for e in epics
-                          if e.get("jira_status") not in _DONE_STATUSES}):
+                          if e.get("jira_status") not in DONE_STATUSES}):
             style = "blocked"
         else:
             style = "eligible"
@@ -282,7 +282,7 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
 
         if row["eligible"]:
             eligible_badge = '<span class="badge badge-high">Eligible</span>'
-        elif row["jira_status"] in _DONE_STATUSES:
+        elif row["jira_status"] in DONE_STATUSES:
             eligible_badge = '<span class="badge badge-impl">Done</span>'
         else:
             eligible_badge = (
@@ -426,7 +426,7 @@ def _truncate(text, max_len):
 
 def _status_badge_class(status):
     """Map Jira status to a badge CSS class."""
-    if status in _DONE_STATUSES:
+    if status in DONE_STATUSES:
         return "badge-impl"
     if status in ("In Progress", "In Review"):
         return "badge-info"

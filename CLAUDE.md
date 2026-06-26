@@ -126,6 +126,31 @@ from Jira "Blocks" issue links. Stores both `dependencies` (blocked by)
 and `blocks` fields. Generates an HTML status report showing task
 eligibility for codegen.
 
+## Pipeline Orchestrator
+
+Orchestrate the full codegen pipeline for one or more strategies:
+
+```bash
+# Process strategies (fresh run: wipes artifacts, fetches from Jira)
+python3 scripts/run_pipeline.py RHAISTRAT-1699 RHAISTRAT-1700
+
+# Dry run (show what would process, don't invoke Claude)
+python3 scripts/run_pipeline.py RHAISTRAT-1699 --dry-run
+
+# CI mode (use run-claude.sh wrapper)
+python3 scripts/run_pipeline.py RHAISTRAT-1699 --run-script ci-scripts/run-claude.sh
+
+# With codegen options
+python3 scripts/run_pipeline.py RHAISTRAT-1699 --max-iterations 5 --fork-owner dora-the-ai-coder
+```
+
+For each strategy: fetches children from Jira, classifies epics by
+eligibility (based on current Jira status and dependency DAG), invokes
+`/epic-codegen` for each eligible epic. Epics blocked by unresolved
+dependencies are skipped — they become eligible in a future run after
+dependencies are marked Done in Jira. Writes a structured JSON run log
+to `pipeline-runs/` for dashboard consumption.
+
 ## Repo Readiness
 
 Before code generation, assess target repo readiness using 6 dimensions (score /12, threshold 8):

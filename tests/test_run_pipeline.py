@@ -1,0 +1,558 @@
+"""Tests for run_pipeline.py — pipeline orchestrator."""
+
+import json
+import os
+import subprocess
+import sys
+from unittest import mock
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+from run_pipeline import (
+    BLOCKED,
+    FAILED,
+    PROCESSED,
+    SKIPPED,
+    build_run_log,
+    clean_artifacts,
+    find_eligible,
+    invoke_codegen,
+    parse_args,
+    print_summary,
+    process_strategy,
+    write_run_log,
+)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _epic(epic_id, jira_status="New", dependencies=None, blocks=None,
+          title=None):
+    """Build a minimal epic data dict."""
+    return {
+        "epic_id": epic_id,
+        "title": title or f"Epic {epic_id}",
+        "strategy_key": "RHAISTRAT-1",
+        "target_repo": "",
+        "target_branch": "main",
+        "status": "Pending",
+        "jira_status": jira_status,
+        "components": None,
+        "dependencies": dependencies,
+        "blocks": blocks,
+        "body": "",
+    }
+
+
+def _make_args(**overrides):
+    """Build a mock args namespace."""
+    defaults = {
+        "keys": ["RHAISTRAT-1"],
+        "dry_run": False,
+        "run_script": None,
+        "max_iterations": None,
+        "fork_owner": None,
+        "no_clean": False,
+        "output_dir": "artifacts",
+        "report_dir": "epic-reports",
+        "log_dir": "pipeline-runs",
+        "timeout": 3600,
+        "no_strategy": True,
+        "no_report": True,
+    }
+    defaults.update(overrides)
+    return mock.MagicMock(**defaults)
+
+
+# ─── TestFindEligible ─────────────────────────────────────────────────────────
+
+class TestFindEligible:
+
+    def test_no_deps_all_eligible(self):
+        epics = {
+            "A-1": _epic("A-1"),
+            "A-2": _epic("A-2"),
+            "A-3": _epic("A-3"),
+        }
+        result = find_eligible(epics, completed_keys=set(), handled_keys=set())
+        assert result == ["A-1", "A-2", "A-3"]
+
+    def test_dep_chain_first_only(self):
+        epics = {
+            "A-1": _epic("A-1"),
+            "A-2": _epic("A-2", dependencies=["A-1"]),
+            "A-3": _epic("A-3", dependencies=["A-2"]),
+        }
+        result = find_eligible(epics, completed_keys=set(), handled_keys=set())
+        assert result == ["A-1"]
+
+    def test_completed_dep_unblocks(self):
+        epics = {
+            "A-1": _epic("A-1"),
+            "A-2": _epic("A-2", dependencies=["A-1"]),
+        }
+        result = find_eligible(
+            epics, completed_keys={"A-1"}, handled_keys={"A-1"})
+        assert result == ["A-2"]
+
+    def test_already_handled_excluded(self):
+        epics = {
+            "A-1": _epic("A-1"),
+            "A-2": _epic("A-2"),
+        }
+        result = find_eligible(
+            epics, completed_keys=set(), handled_keys={"A-1"})
+        assert result == ["A-2"]
+
+    def test_empty_epics(self):
+        result = find_eligible({}, completed_keys=set(), handled_keys=set())
+        assert result == []
+
+    def test_multiple_deps_all_must_be_completed(self):
+        epics = {
+            "A-1": _epic("A-1"),
+            "A-2": _epic("A-2"),
+            "A-3": _epic("A-3", dependencies=["A-1", "A-2"]),
+        }
+        result = find_eligible(
+            epics, completed_keys={"A-1"}, handled_keys={"A-1"})
+        assert "A-3" not in result
+        assert "A-2" in result
+
+    def test_returns_sorted(self):
+        epics = {
+            "C-1": _epic("C-1"),
+            "A-1": _epic("A-1"),
+            "B-1": _epic("B-1"),
+        }
+        result = find_eligible(epics, completed_keys=set(), handled_keys=set())
+        assert result == ["A-1", "B-1", "C-1"]
+
+
+# ─── TestProcessStrategy ─────────────────────────────────────────────────────
+
+class TestProcessStrategy:
+
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_linear_chain_processes_first_only(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke):
+        """A→B chain: only A is eligible (B blocked by A)."""
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": ["A-2"]},
+            "A-2": {"dependencies": ["A-1"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", blocks=["A-2"]),
+            _epic("A-2", dependencies=["A-1"]),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[PROCESSED]) == 1
+        assert results[PROCESSED][0][0] == "A-1"
+        assert len(results[BLOCKED]) == 1
+        assert results[BLOCKED][0][0] == "A-2"
+        mock_invoke.assert_called_once_with("A-1", args)
+
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_no_deps_all_eligible(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke):
+        """Two independent epics: both eligible."""
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": []},
+            "A-2": {"dependencies": [], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1"), _epic("A-2"),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[PROCESSED]) == 2
+        assert len(results[BLOCKED]) == 0
+
+    @mock.patch("run_pipeline.invoke_codegen", return_value=False)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_failure_blocks_dependents(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke):
+        """A fails → B stays blocked."""
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": ["A-2"]},
+            "A-2": {"dependencies": ["A-1"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", blocks=["A-2"]),
+            _epic("A-2", dependencies=["A-1"]),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[FAILED]) == 1
+        assert results[FAILED][0][0] == "A-1"
+        assert len(results[BLOCKED]) == 1
+        assert results[BLOCKED][0][0] == "A-2"
+
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_all_done_in_jira(self, mock_gen, mock_dag, mock_fetch):
+        """All epics already Done → all skipped."""
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": []},
+            "A-2": {"dependencies": [], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", jira_status="Done"),
+            _epic("A-2", jira_status="Closed"),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 2
+        assert len(results[PROCESSED]) == 0
+        assert len(results[BLOCKED]) == 0
+
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_dry_run_skips_invocation(self, mock_gen, mock_dag, mock_fetch):
+        """Dry run: epics marked processed but no subprocess call."""
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[PROCESSED]) == 1
+        assert results[PROCESSED][0][1] == "dry-run"
+
+    @mock.patch("run_pipeline.fetch_children", return_value=[])
+    def test_no_children(self, mock_fetch):
+        """Strategy with no children → empty results."""
+        args = _make_args(output_dir="/tmp/test-artifacts")
+        epics, results = process_strategy(
+            "RHAISTRAT-1", "s", "u", "t", args)
+        assert epics == []
+        assert all(len(v) == 0 for v in results.values())
+
+    @mock.patch("run_pipeline.invoke_codegen")
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_mixed_results(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke):
+        """One done, one eligible succeeds, one eligible fails, one blocked."""
+        issues = [{"key": f"A-{i}", "fields": {}} for i in range(1, 5)]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": []},
+            "A-2": {"dependencies": [], "blocks": []},
+            "A-3": {"dependencies": [], "blocks": ["A-4"]},
+            "A-4": {"dependencies": ["A-3"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", jira_status="Done"),
+            _epic("A-2"),
+            _epic("A-3", blocks=["A-4"]),
+            _epic("A-4", dependencies=["A-3"]),
+        ]):
+            mock_invoke.side_effect = [True, False]
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            epics, results = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert len(results[PROCESSED]) == 1
+        assert len(results[FAILED]) == 1
+        assert len(results[BLOCKED]) == 1
+
+
+# ─── TestInvokeCodegen ────────────────────────────────────────────────────────
+
+class TestInvokeCodegen:
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_direct_mode_command(self, mock_run):
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        args = _make_args()
+        result = invoke_codegen("RHOAIENG-72103", args)
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "claude"
+        assert "/epic-codegen RHOAIENG-72103" in cmd
+        assert "--dangerously-skip-permissions" in cmd
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_ci_mode_command(self, mock_run):
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        args = _make_args(run_script="ci-scripts/run-claude.sh")
+        result = invoke_codegen("RHOAIENG-72103", args)
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "bash"
+        assert cmd[1] == "ci-scripts/run-claude.sh"
+        assert "/epic-codegen RHOAIENG-72103" in cmd[2]
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_passes_max_iterations(self, mock_run):
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        args = _make_args(max_iterations=5)
+        invoke_codegen("A-1", args)
+
+        cmd = mock_run.call_args[0][0]
+        skill_arg = cmd[2]  # -p argument
+        assert "--max-iterations 5" in skill_arg
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_passes_fork_owner(self, mock_run):
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        invoke_codegen("A-1", args)
+
+        cmd = mock_run.call_args[0][0]
+        skill_arg = cmd[2]  # -p argument
+        assert "--fork-owner dora-the-ai-coder" in skill_arg
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_nonzero_exit_returns_false(self, mock_run):
+        mock_run.return_value = mock.MagicMock(returncode=1)
+        args = _make_args()
+        result = invoke_codegen("A-1", args)
+        assert result is False
+
+    @mock.patch("run_pipeline.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10))
+    def test_timeout_returns_false(self, mock_run):
+        args = _make_args(timeout=10)
+        result = invoke_codegen("A-1", args)
+        assert result is False
+
+    @mock.patch("run_pipeline.subprocess.run",
+                side_effect=FileNotFoundError("claude"))
+    def test_command_not_found_returns_false(self, mock_run):
+        args = _make_args()
+        result = invoke_codegen("A-1", args)
+        assert result is False
+
+
+# ─── TestCleanArtifacts ───────────────────────────────────────────────────────
+
+class TestCleanArtifacts:
+
+    def test_wipes_epic_tasks_and_strategies(self, tmp_path):
+        output_dir = str(tmp_path / "artifacts")
+        et = os.path.join(output_dir, "epic-tasks")
+        st = os.path.join(output_dir, "strategies")
+        os.makedirs(et)
+        os.makedirs(st)
+        with open(os.path.join(et, "test.md"), "w") as f:
+            f.write("test")
+        with open(os.path.join(st, "test.md"), "w") as f:
+            f.write("test")
+
+        clean_artifacts(output_dir)
+
+        assert os.path.isdir(et)
+        assert os.path.isdir(st)
+        assert os.listdir(et) == []
+        assert os.listdir(st) == []
+
+    def test_preserves_codegen_runs(self, tmp_path):
+        output_dir = str(tmp_path / "artifacts")
+        cr = os.path.join(output_dir, "codegen-runs")
+        os.makedirs(cr)
+        with open(os.path.join(cr, "run.yaml"), "w") as f:
+            f.write("test")
+
+        clean_artifacts(output_dir)
+
+        assert os.path.isfile(os.path.join(cr, "run.yaml"))
+
+    def test_creates_dirs_if_missing(self, tmp_path):
+        output_dir = str(tmp_path / "artifacts")
+
+        clean_artifacts(output_dir)
+
+        assert os.path.isdir(os.path.join(output_dir, "epic-tasks"))
+        assert os.path.isdir(os.path.join(output_dir, "strategies"))
+
+
+# ─── TestBuildRunLog ──────────────────────────────────────────────────────────
+
+class TestBuildRunLog:
+
+    def test_captures_all_epics_with_actions(self):
+        from datetime import datetime, timezone
+        epics = [_epic("A-1"), _epic("A-2", dependencies=["A-1"])]
+        results = {
+            PROCESSED: [("A-1", "codegen completed")],
+            SKIPPED: [],
+            BLOCKED: [("A-2", "Blocked by A-1")],
+            FAILED: [],
+        }
+        start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
+        log = build_run_log({"RHAISTRAT-1": (epics, results)}, start)
+
+        strat = log["strategies"]["RHAISTRAT-1"]
+        assert "A-1" in strat["epics"]
+        assert "A-2" in strat["epics"]
+        assert strat["epics"]["A-1"]["action"] == PROCESSED
+        assert strat["epics"]["A-1"]["result"] == "success"
+        assert strat["epics"]["A-2"]["action"] == BLOCKED
+
+    def test_includes_strategy_summary_counts(self):
+        from datetime import datetime, timezone
+        epics = [_epic("A-1"), _epic("A-2", jira_status="Done")]
+        results = {
+            PROCESSED: [("A-1", "codegen completed")],
+            SKIPPED: [("A-2", "Already done")],
+            BLOCKED: [],
+            FAILED: [],
+        }
+        start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
+        log = build_run_log({"RHAISTRAT-1": (epics, results)}, start)
+
+        summary = log["strategies"]["RHAISTRAT-1"]["summary"]
+        assert summary[PROCESSED] == 1
+        assert summary[SKIPPED] == 1
+        assert summary[BLOCKED] == 0
+        assert summary[FAILED] == 0
+
+    def test_multiple_strategies(self):
+        from datetime import datetime, timezone
+        epics_a = [_epic("A-1")]
+        results_a = {
+            PROCESSED: [("A-1", "done")], SKIPPED: [],
+            BLOCKED: [], FAILED: [],
+        }
+        epics_b = [_epic("B-1")]
+        results_b = {
+            PROCESSED: [], SKIPPED: [],
+            BLOCKED: [], FAILED: [("B-1", "failed")],
+        }
+        start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
+        log = build_run_log({
+            "RHAISTRAT-1": (epics_a, results_a),
+            "RHAISTRAT-2": (epics_b, results_b),
+        }, start)
+
+        assert "RHAISTRAT-1" in log["strategies"]
+        assert "RHAISTRAT-2" in log["strategies"]
+
+    def test_run_id_format(self):
+        from datetime import datetime, timezone
+        start = datetime(2026, 6, 26, 20, 30, 0, tzinfo=timezone.utc)
+        log = build_run_log({}, start)
+        assert log["run_id"] == "2026-06-26T20-30-00Z"
+
+    def test_dry_run_result(self):
+        from datetime import datetime, timezone
+        epics = [_epic("A-1")]
+        results = {
+            PROCESSED: [("A-1", "dry-run")], SKIPPED: [],
+            BLOCKED: [], FAILED: [],
+        }
+        start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
+        log = build_run_log({"RHAISTRAT-1": (epics, results)}, start)
+
+        assert log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]["result"] == "dry-run"
+
+
+# ─── TestWriteRunLog ──────────────────────────────────────────────────────────
+
+class TestWriteRunLog:
+
+    def test_writes_json_file(self, tmp_path):
+        log = {
+            "run_id": "2026-06-26T20-30-00Z",
+            "start_time": "2026-06-26T20:30:00+00:00",
+            "end_time": "2026-06-26T21:00:00+00:00",
+            "strategies": {},
+        }
+        path = write_run_log(log, str(tmp_path / "pipeline-runs"))
+
+        assert os.path.isfile(path)
+        assert path.endswith("2026-06-26T20-30-00Z.json")
+        with open(path) as f:
+            data = json.load(f)
+        assert data["run_id"] == "2026-06-26T20-30-00Z"
+
+    def test_creates_output_dir(self, tmp_path):
+        log = {"run_id": "test", "strategies": {}}
+        out_dir = str(tmp_path / "new-dir")
+        path = write_run_log(log, out_dir)
+        assert os.path.isdir(out_dir)
+        assert os.path.isfile(path)
+
+
+# ─── TestParseArgs ────────────────────────────────────────────────────────────
+
+class TestParseArgs:
+
+    def test_single_key(self):
+        args = parse_args(["RHAISTRAT-1699"])
+        assert args.keys == ["RHAISTRAT-1699"]
+        assert args.dry_run is False
+        assert args.no_clean is False
+        assert args.timeout == 3600
+
+    def test_multiple_keys(self):
+        args = parse_args(["RHAISTRAT-1699", "RHAISTRAT-1700"])
+        assert args.keys == ["RHAISTRAT-1699", "RHAISTRAT-1700"]
+
+    def test_dry_run(self):
+        args = parse_args(["RHAISTRAT-1", "--dry-run"])
+        assert args.dry_run is True
+
+    def test_all_options(self):
+        args = parse_args([
+            "RHAISTRAT-1",
+            "--dry-run",
+            "--run-script", "run.sh",
+            "--max-iterations", "5",
+            "--fork-owner", "dora",
+            "--no-clean",
+            "--timeout", "600",
+            "--no-report",
+            "--no-strategy",
+        ])
+        assert args.run_script == "run.sh"
+        assert args.max_iterations == 5
+        assert args.fork_owner == "dora"
+        assert args.no_clean is True
+        assert args.timeout == 600
+        assert args.no_report is True
+        assert args.no_strategy is True
