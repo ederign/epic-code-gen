@@ -29,7 +29,7 @@ SCHEMAS = {
         "epic_id": {
             "type": "string",
             "required": True,
-            "pattern": r"^RHAISTRAT-\d+-E\d+$",
+            "pattern": r"^[A-Z][A-Z0-9]+-\d+(-E\d+)?$",
         },
         "title": {
             "type": "string",
@@ -38,7 +38,7 @@ SCHEMAS = {
         "strategy_key": {
             "type": "string",
             "required": True,
-            "pattern": r"^RHAISTRAT-\d+$",
+            "pattern": r"^[A-Z][A-Z0-9]+-\d+$",
         },
         "target_repo": {
             "type": "string",
@@ -55,6 +55,11 @@ SCHEMAS = {
             "default": None,
         },
         "dependencies": {
+            "type": "list",
+            "required": False,
+            "default": None,
+        },
+        "blocks": {
             "type": "list",
             "required": False,
             "default": None,
@@ -83,12 +88,17 @@ SCHEMAS = {
             "required": False,
             "default": None,
         },
+        "jira_status": {
+            "type": "string",
+            "required": False,
+            "default": None,
+        },
     },
     "codegen-run": {
         "epic_id": {
             "type": "string",
             "required": True,
-            "pattern": r"^RHAISTRAT-\d+-E\d+$",
+            "pattern": r"^[A-Z][A-Z0-9]+-\d+(-E\d+)?$",
         },
         "status": {
             "type": "string",
@@ -142,7 +152,7 @@ SCHEMAS = {
         "epic_id": {
             "type": "string",
             "required": True,
-            "pattern": r"^RHAISTRAT-\d+-E\d+$",
+            "pattern": r"^[A-Z][A-Z0-9]+-\d+(-E\d+)?$",
         },
         "recommendation": {
             "type": "string",

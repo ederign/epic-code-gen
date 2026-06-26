@@ -104,6 +104,28 @@ Strategy documents are fetched from Jira (RHAISTRAT project) and saved to
 affected components, dependencies, and staff engineer input — used as context
 during spec generation.
 
+## Jira-Direct Epic Fetching
+
+Fetch child work items directly from Jira and generate epic-task artifacts
+with dependency DAG:
+
+```bash
+# Fetch all children of a strategy (fresh run: wipes artifacts first)
+python3 scripts/fetch_jira_epics.py RHAISTRAT-1699 --clean
+
+# Without HTML report
+python3 scripts/fetch_jira_epics.py RHAISTRAT-1699 --clean --no-report
+
+# Output as JSON (no files written)
+python3 scripts/fetch_jira_epics.py RHAISTRAT-1699 --json
+```
+
+Uses real Jira keys as `epic_id` (e.g., `RHOAIENG-72103`). Requires
+`JIRA_SERVER`, `JIRA_USER`, `JIRA_TOKEN` env vars. Builds dependency DAG
+from Jira "Blocks" issue links. Stores both `dependencies` (blocked by)
+and `blocks` fields. Generates an HTML status report showing task
+eligibility for codegen.
+
 ## Repo Readiness
 
 Before code generation, assess target repo readiness using 6 dimensions (score /12, threshold 8):

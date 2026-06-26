@@ -9,6 +9,7 @@
       "Bash(python3 scripts/score_reviews.py *)",
       "Bash(python3 scripts/run_index.py *)",
       "Bash(python3 scripts/fetch_epic.py *)",
+      "Bash(python3 scripts/fetch_jira_epics.py *)",
       "Bash(*/scripts/task-brief *)",
       "Bash(*/scripts/review-package *)",
       "Bash(*/scripts/sdd-workspace)"

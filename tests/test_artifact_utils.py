@@ -63,8 +63,22 @@ class TestEpicTaskSchema:
         assert any("epic_id" in e for e in errors)
 
     def test_invalid_epic_id_pattern(self):
-        errors = validate(self._valid_data(epic_id="BAD-123"), "epic-task")
+        errors = validate(self._valid_data(epic_id="bad-123"), "epic-task")
         assert any("does not match" in e for e in errors)
+
+    def test_valid_real_jira_key(self):
+        errors = validate(self._valid_data(epic_id="RHOAIENG-72103"), "epic-task")
+        assert errors == []
+
+    def test_blocks_field_accepted(self):
+        data = self._valid_data(blocks=["RHOAIENG-72104"])
+        errors = validate(data, "epic-task")
+        assert errors == []
+
+    def test_jira_status_field_accepted(self):
+        data = self._valid_data(jira_status="In Progress")
+        errors = validate(data, "epic-task")
+        assert errors == []
 
     def test_invalid_status_enum(self):
         errors = validate(self._valid_data(status="Unknown"), "epic-task")
