@@ -318,9 +318,12 @@ class TestProcessStrategy:
 class TestInvokeCodegen:
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_default_uses_run_claude_sh(self, mock_run):
+    def test_default_uses_run_claude_sh(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        args = _make_args()
+        meta = tmp_path / "codegen-runs" / "RHOAIENG-72103"
+        meta.mkdir(parents=True)
+        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        args = _make_args(output_dir=str(tmp_path))
         result = invoke_codegen("RHOAIENG-72103", args)
 
         assert result is True
@@ -332,9 +335,13 @@ class TestInvokeCodegen:
         assert "LOG_FILE" in env
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_custom_run_script(self, mock_run):
+    def test_custom_run_script(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        args = _make_args(run_script="custom/run.sh")
+        meta = tmp_path / "codegen-runs" / "RHOAIENG-72103"
+        meta.mkdir(parents=True)
+        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        args = _make_args(run_script="custom/run.sh",
+                          output_dir=str(tmp_path))
         result = invoke_codegen("RHOAIENG-72103", args)
 
         assert result is True
@@ -344,9 +351,12 @@ class TestInvokeCodegen:
         assert "/epic-codegen RHOAIENG-72103" in cmd[2]
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_passes_max_iterations(self, mock_run):
+    def test_passes_max_iterations(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        args = _make_args(max_iterations=5)
+        meta = tmp_path / "codegen-runs" / "A-1"
+        meta.mkdir(parents=True)
+        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        args = _make_args(max_iterations=5, output_dir=str(tmp_path))
         invoke_codegen("A-1", args)
 
         cmd = mock_run.call_args[0][0]
@@ -354,14 +364,25 @@ class TestInvokeCodegen:
         assert "--max-iterations 5" in skill_arg
 
     @mock.patch("run_pipeline.subprocess.run")
-    def test_passes_fork_owner(self, mock_run):
+    def test_passes_fork_owner(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        args = _make_args(fork_owner="dora-the-ai-coder")
+        meta = tmp_path / "codegen-runs" / "A-1"
+        meta.mkdir(parents=True)
+        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        args = _make_args(fork_owner="dora-the-ai-coder",
+                          output_dir=str(tmp_path))
         invoke_codegen("A-1", args)
 
         cmd = mock_run.call_args[0][0]
         skill_arg = cmd[2]  # -p argument
         assert "--fork-owner dora-the-ai-coder" in skill_arg
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_exit_zero_no_artifacts_returns_false(self, mock_run, tmp_path):
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        args = _make_args(output_dir=str(tmp_path))
+        result = invoke_codegen("A-1", args)
+        assert result is False
 
     @mock.patch("run_pipeline.subprocess.run")
     def test_nonzero_exit_returns_false(self, mock_run):
@@ -699,7 +720,7 @@ class TestTransitionIssue:
 
     _TRANSITIONS = [
         {"id": "11", "to": {"name": "In Progress"}},
-        {"id": "21", "to": {"name": "In Review"}},
+        {"id": "21", "to": {"name": "Review"}},
         {"id": "31", "to": {"name": "Done"}},
     ]
 
@@ -785,7 +806,7 @@ class TestProcessStrategyTransitions:
 
         calls = mock_trans.call_args_list
         assert len(calls) == 2
-        assert calls[1] == mock.call("s", "u", "t", "A-1", "In Review")
+        assert calls[1] == mock.call("s", "u", "t", "A-1", "Review")
 
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.invoke_codegen", return_value=False)
@@ -847,7 +868,7 @@ class TestProcessStrategyTransitions:
         assert "A-1" in transitions_log
         assert len(transitions_log["A-1"]) == 2
         assert transitions_log["A-1"][0]["to"] == "In Progress"
-        assert transitions_log["A-1"][1]["to"] == "In Review"
+        assert transitions_log["A-1"][1]["to"] == "Review"
 
 
 # ─── TestBuildRunLogTransitions ─────────────────────────────────────────────
@@ -864,7 +885,7 @@ class TestBuildRunLogTransitions:
         transitions_log = {
             "A-1": [
                 {"to": "In Progress", "success": True},
-                {"to": "In Review", "success": True},
+                {"to": "Review", "success": True},
             ],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
@@ -1157,7 +1178,7 @@ class TestProcessableStatuses:
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="In Review")):
+                        return_value=_epic("A-1", jira_status="Review")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
@@ -1188,7 +1209,7 @@ class TestReconciliation:
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="In Review", blocks=["A-2"]),
+            _epic("A-1", jira_status="Review", blocks=["A-2"]),
             _epic("A-2", jira_status="New", dependencies=["A-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
@@ -1219,7 +1240,7 @@ class TestReconciliation:
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="In Review", blocks=["A-2"]),
+            _epic("A-1", jira_status="Review", blocks=["A-2"]),
             _epic("A-2", jira_status="New", dependencies=["A-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
@@ -1242,7 +1263,7 @@ class TestReconciliation:
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="In Review")):
+                        return_value=_epic("A-1", jira_status="Review")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)

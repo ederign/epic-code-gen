@@ -327,13 +327,20 @@ def invoke_codegen(epic_id, args):
             timeout=args.timeout,
             env=env,
         )
-        if result.returncode == 0:
-            print(f"  Result: SUCCESS")
-            return True
-        else:
+        if result.returncode != 0:
             print(f"  Result: FAILED (exit code {result.returncode})",
                   file=sys.stderr)
             return False
+
+        run_meta = os.path.join(
+            args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
+        if not os.path.exists(run_meta):
+            print(f"  Result: FAILED (exit code 0 but no artifacts produced)",
+                  file=sys.stderr)
+            return False
+
+        print(f"  Result: SUCCESS")
+        return True
     except subprocess.TimeoutExpired:
         print(f"  Result: TIMEOUT ({args.timeout}s)", file=sys.stderr)
         return False
@@ -402,7 +409,7 @@ def process_strategy(strategy_key, server, user, token, args):
             results[SKIPPED].append((key, "Already done in Jira"))
             completed_keys.add(key)
             print(f"  {key}: SKIP (already done)")
-        elif status == "In Review" and not args.dry_run:
+        elif status == "Review" and not args.dry_run:
             pr_url = known_pr_urls.get(key)
             if pr_url and check_pr_merged(pr_url):
                 ok, _ = transition_issue(
@@ -447,9 +454,9 @@ def process_strategy(strategy_key, server, user, token, args):
         if success:
             results[PROCESSED].append((epic_id, "codegen completed"))
             ok, _ = transition_issue(
-                server, user, token, epic_id, "In Review")
+                server, user, token, epic_id, "Review")
             epic_transitions.append({
-                "to": "In Review", "success": ok})
+                "to": "Review", "success": ok})
 
             pr_url = read_pr_url(epic_id, args.output_dir)
             if pr_url:

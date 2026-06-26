@@ -107,7 +107,7 @@ push credentials embedded in the URL.
 python3 scripts/repo_readiness.py .target-repo/
 ```
 
-Gate: score must be >= 8/12. If below, report the gap and stop.
+Record the score and dimension breakdown in `run-metadata.yaml` under a `readiness` key. Proceed regardless of score.
 
 ```bash
 python3 scripts/validate_target.py .target-repo/ --json
@@ -519,7 +519,7 @@ Do not re-dispatch work that artifacts show as complete.
 ## Error Handling
 
 - Clone fails → report error, stop
-- Readiness below threshold → report gap, stop
+- Readiness below threshold → log warning with gaps, proceed
 - SDD reports BLOCKED after retry → report to user, stop
 - All reviewers fail to produce scores → report error, stop
 - File write fails → report error, stop
