@@ -21,6 +21,7 @@ import sys
 import github_utils
 
 DEFAULT_DEST = ".target-repo"
+DEFAULT_FORK_OWNER = "dora-the-ai-coder"
 
 
 def _run_git(args, cwd=None, check=True):
@@ -59,6 +60,8 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
     branch = f"epic/{epic_id}"
 
     token = None
+    if fork_owner and not gh_token_var:
+        gh_token_var = github_utils.DEFAULT_TOKEN_VAR
     if gh_token_var:
         token = github_utils.require_env(gh_token_var)
 
@@ -190,8 +193,8 @@ def main():
     parser.add_argument("epic_id", help="Epic ID (e.g., RHAISTRAT-1749-E001)")
     parser.add_argument("--dest", default=DEFAULT_DEST,
                         help=f"Clone destination (default: {DEFAULT_DEST})")
-    parser.add_argument("--fork-owner", default=None,
-                        help="GitHub username for fork remote")
+    parser.add_argument("--fork-owner", default=DEFAULT_FORK_OWNER,
+                        help=f"GitHub username for fork remote (default: {DEFAULT_FORK_OWNER})")
     parser.add_argument("--gh-token-var", default=None,
                         help="Env var name for GitHub token (default: EPIC_CODEGEN_GITHUB_TOKEN)")
     parser.add_argument("--clean", action="store_true",

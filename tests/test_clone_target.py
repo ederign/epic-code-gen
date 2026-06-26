@@ -17,6 +17,7 @@ from clone_target import (
     _ensure_branch,
     _setup_fork_remote,
     _configure_git_identity,
+    DEFAULT_FORK_OWNER,
 )
 
 
@@ -134,20 +135,44 @@ class TestClone:
         with pytest.raises(ValueError, match="different repo"):
             clone(remote2, "EPIC-002", dest=dest)
 
-    def test_fork_owner_with_local_remote(self, tmp_path):
+    def test_fork_owner_with_local_remote(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "ghp_fake")
         remote = _init_repo(tmp_path / "remote")
         dest = str(tmp_path / "clone")
 
-        result = clone(remote, "EPIC-001", dest=dest, fork_owner="ederign")
+        with patch("github_utils.get_authenticated_user",
+                   return_value={"login": "ederign", "email": None}):
+            result = clone(remote, "EPIC-001", dest=dest, fork_owner="ederign")
 
         assert result["status"] == "created"
         assert result["fork_url"] is None  # non-github URL, so no fork
         assert result["fork_created"] is False
 
+    def test_fork_owner_without_token_fails_early(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
+        remote = _init_repo(tmp_path / "remote")
+        dest = str(tmp_path / "clone")
+
+        with pytest.raises(EnvironmentError, match="EPIC_CODEGEN_GITHUB_TOKEN"):
+            clone(remote, "EPIC-001", dest=dest, fork_owner="ederign")
+
+    def test_no_fork_owner_skips_token(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
+        remote = _init_repo(tmp_path / "remote")
+        dest = str(tmp_path / "clone")
+
+        result = clone(remote, "EPIC-001", dest=dest, fork_owner=None)
+
+        assert result["status"] == "created"
+        assert result["fork_url"] is None
+
+    def test_default_fork_owner(self):
+        assert DEFAULT_FORK_OWNER == "dora-the-ai-coder"
+
     def test_nonexistent_remote_fails(self, tmp_path):
         with pytest.raises(subprocess.CalledProcessError):
             clone("/nonexistent/repo", "EPIC-001",
-                  dest=str(tmp_path / "clone"))
+                  dest=str(tmp_path / "clone"), fork_owner=None)
 
 
 # ─── Branch Handling ─────────────────────────────────────────────────────────

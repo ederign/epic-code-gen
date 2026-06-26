@@ -25,8 +25,8 @@ Parse `$ARGUMENTS` for:
 - `EPIC_ID` (required) — e.g., `RHAISTRAT-1749-E001`
 - `--max-iterations N` — default 3
 - `--dry-run` — produce diff but do not create PR
-- `--fork-owner USER` — GitHub username for fork remote
-- `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Enables: authenticated clone, fork creation, push to fork. Required for CI environments without `gh` CLI.
+- `--fork-owner USER` — GitHub username for fork remote (default: `dora-the-ai-coder`)
+- `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Required when `--fork-owner` is set. Enables: authenticated clone, fork creation, push to fork, PR creation.
 - `--checks lint,test,typecheck` — which validation checks to run (default: all)
 
 ## Autonomous Operation
