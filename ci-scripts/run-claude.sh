@@ -17,6 +17,7 @@ claude -p "${1:?Usage: $0 <prompt>}" \
   --model "${CLAUDE_MODEL:-claude-opus-4-6}" \
   --dangerously-skip-permissions \
   --output-format stream-json \
+  --include-partial-messages \
   --verbose 2>"${LOG_DIR:-/tmp}/claude-stderr.log" > "$claude_fifo" &
 claude_pid=$!
 
