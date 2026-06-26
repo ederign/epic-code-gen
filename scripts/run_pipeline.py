@@ -53,6 +53,8 @@ SKIPPED = "skipped"
 BLOCKED = "blocked"
 FAILED = "failed"
 
+PROCESSABLE_STATUSES = {"New", "To Do", "Open"}
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
 
@@ -123,6 +125,53 @@ def link_pr_to_jira(server, user, token, issue_key, pr_url):
     except Exception as e:
         print(f"  Warning: failed to link PR to {issue_key}: {e}",
               file=sys.stderr)
+        return False
+
+
+def load_pr_urls_from_logs(log_dir):
+    """Scan previous run logs and collect known PR URLs per epic.
+
+    Returns:
+        dict: {epic_id: pr_url} — latest PR URL wins if an epic appears
+        in multiple logs.
+    """
+    pr_urls = {}
+    if not os.path.isdir(log_dir):
+        return pr_urls
+    for filename in sorted(os.listdir(log_dir)):
+        if not filename.endswith(".json"):
+            continue
+        path = os.path.join(log_dir, filename)
+        try:
+            with open(path, encoding="utf-8") as f:
+                log = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        for strategy in log.get("strategies", {}).values():
+            for eid, epic_data in strategy.get("epics", {}).items():
+                url = epic_data.get("pr_url")
+                if url:
+                    pr_urls[eid] = url
+    return pr_urls
+
+
+def check_pr_merged(pr_url):
+    """Check if a GitHub PR is merged using the gh CLI.
+
+    Returns:
+        bool: True if merged, False otherwise (including errors).
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", pr_url, "--json", "merged"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return False
+        data = json.loads(result.stdout)
+        return data.get("merged", False)
+    except (subprocess.TimeoutExpired, FileNotFoundError,
+            json.JSONDecodeError):
         return False
 
 
@@ -339,12 +388,38 @@ def process_strategy(strategy_key, server, user, token, args):
     completed_keys = set()
     handled_keys = set()
 
+    known_pr_urls = load_pr_urls_from_logs(args.log_dir)
+
     for key, epic in all_epics_by_key.items():
-        if epic.get("jira_status") in DONE_STATUSES:
+        status = epic.get("jira_status")
+        if status in PROCESSABLE_STATUSES:
+            continue
+
+        if status in DONE_STATUSES:
             results[SKIPPED].append((key, "Already done in Jira"))
             completed_keys.add(key)
-            handled_keys.add(key)
             print(f"  {key}: SKIP (already done)")
+        elif status == "In Review" and not args.dry_run:
+            pr_url = known_pr_urls.get(key)
+            if pr_url and check_pr_merged(pr_url):
+                ok, _ = transition_issue(
+                    server, user, token, key, "Done")
+                if ok:
+                    completed_keys.add(key)
+                    transitions_log[key] = [
+                        {"to": "Done", "success": True}]
+                    print(f"  {key}: RECONCILED (PR merged → Done)")
+                else:
+                    print(f"  {key}: PR merged but transition failed")
+                results[SKIPPED].append(
+                    (key, "PR merged, transitioned to Done"))
+            else:
+                results[SKIPPED].append((key, f"Active ({status})"))
+                print(f"  {key}: SKIP (active: {status})")
+        else:
+            results[SKIPPED].append((key, f"Active ({status})"))
+            print(f"  {key}: SKIP (active: {status})")
+        handled_keys.add(key)
 
     eligible = find_eligible(all_epics_by_key, completed_keys, handled_keys)
 

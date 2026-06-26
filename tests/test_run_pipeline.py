@@ -13,12 +13,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from run_pipeline import (
     BLOCKED,
     FAILED,
+    PROCESSABLE_STATUSES,
     PROCESSED,
     SKIPPED,
     build_run_log,
+    check_pr_merged,
     clean_artifacts,
     find_eligible,
     link_pr_to_jira,
+    load_pr_urls_from_logs,
     load_repo_mapping,
     read_pr_url,
     resolve_repo_via_llm,
@@ -1028,3 +1031,218 @@ class TestBuildRunLogPrUrl:
 
         epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
         assert epic_log["pr_url"] == "https://github.com/org/repo/pull/42"
+
+
+# ─── TestCheckPrMerged ─────────────────────────────────────────────────────
+
+class TestCheckPrMerged:
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_merged_returns_true(self, mock_run):
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout='{"merged": true}')
+        assert check_pr_merged("https://github.com/org/repo/pull/1") is True
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_not_merged_returns_false(self, mock_run):
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout='{"merged": false}')
+        assert check_pr_merged("https://github.com/org/repo/pull/1") is False
+
+    @mock.patch("run_pipeline.subprocess.run",
+                side_effect=FileNotFoundError("gh"))
+    def test_gh_not_found_returns_false(self, mock_run):
+        assert check_pr_merged("https://github.com/org/repo/pull/1") is False
+
+
+# ─── TestLoadPrUrlsFromLogs ────────────────────────────────────────────────
+
+class TestLoadPrUrlsFromLogs:
+
+    def test_loads_urls_from_log_files(self, tmp_path):
+        log = {
+            "strategies": {
+                "RHAISTRAT-1": {
+                    "epics": {
+                        "A-1": {"pr_url": "https://github.com/org/repo/pull/1"},
+                        "A-2": {"pr_url": None},
+                    }
+                }
+            }
+        }
+        log_file = tmp_path / "run1.json"
+        with open(log_file, "w") as f:
+            json.dump(log, f)
+
+        result = load_pr_urls_from_logs(str(tmp_path))
+        assert result == {"A-1": "https://github.com/org/repo/pull/1"}
+
+    def test_missing_dir_returns_empty(self, tmp_path):
+        result = load_pr_urls_from_logs(str(tmp_path / "nonexistent"))
+        assert result == {}
+
+    def test_latest_url_wins(self, tmp_path):
+        log1 = {
+            "strategies": {"S-1": {"epics": {
+                "A-1": {"pr_url": "https://github.com/org/repo/pull/1"},
+            }}}
+        }
+        log2 = {
+            "strategies": {"S-1": {"epics": {
+                "A-1": {"pr_url": "https://github.com/org/repo/pull/2"},
+            }}}
+        }
+        with open(tmp_path / "a-run1.json", "w") as f:
+            json.dump(log1, f)
+        with open(tmp_path / "b-run2.json", "w") as f:
+            json.dump(log2, f)
+
+        result = load_pr_urls_from_logs(str(tmp_path))
+        assert result["A-1"] == "https://github.com/org/repo/pull/2"
+
+
+# ─── TestProcessableStatuses ──────────────────────────────────────────────
+
+class TestProcessableStatuses:
+
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_new_epic_is_eligible(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1", jira_status="New")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[PROCESSED]) == 1
+        assert results[PROCESSED][0][0] == "A-1"
+
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_in_progress_epic_is_skipped(
+            self, mock_gen, mock_dag, mock_fetch):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1", jira_status="In Progress")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert "Active" in results[SKIPPED][0][1]
+        assert len(results[PROCESSED]) == 0
+
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_in_review_epic_is_skipped(
+            self, mock_gen, mock_dag, mock_fetch):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1", jira_status="In Review")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert len(results[PROCESSED]) == 0
+
+
+# ─── TestReconciliation ───────────────────────────────────────────────────
+
+class TestReconciliation:
+
+    @mock.patch("run_pipeline.check_pr_merged", return_value=True)
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.load_pr_urls_from_logs",
+                return_value={"A-1": "https://github.com/org/repo/pull/1"})
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_merged_pr_transitions_to_done(
+            self, mock_gen, mock_dag, mock_fetch, mock_logs,
+            mock_trans, mock_merged):
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": ["A-2"]},
+            "A-2": {"dependencies": ["A-1"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", jira_status="In Review", blocks=["A-2"]),
+            _epic("A-2", jira_status="New", dependencies=["A-1"]),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            with mock.patch("run_pipeline.invoke_codegen", return_value=True):
+                _, results, transitions_log, _ = process_strategy(
+                    "RHAISTRAT-1", "s", "u", "t", args)
+
+        mock_trans.assert_any_call("s", "u", "t", "A-1", "Done")
+        assert any("merged" in s[1].lower() for s in results[SKIPPED]
+                    if s[0] == "A-1")
+        assert "A-1" in transitions_log
+        assert len(results[PROCESSED]) == 1
+        assert results[PROCESSED][0][0] == "A-2"
+
+    @mock.patch("run_pipeline.check_pr_merged", return_value=False)
+    @mock.patch("run_pipeline.load_pr_urls_from_logs",
+                return_value={"A-1": "https://github.com/org/repo/pull/1"})
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_unmerged_pr_stays_skipped(
+            self, mock_gen, mock_dag, mock_fetch, mock_logs, mock_merged):
+        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "A-1": {"dependencies": [], "blocks": ["A-2"]},
+            "A-2": {"dependencies": ["A-1"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("A-1", jira_status="In Review", blocks=["A-2"]),
+            _epic("A-2", jira_status="New", dependencies=["A-1"]),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert results[SKIPPED][0][0] == "A-1"
+        assert len(results[BLOCKED]) == 1
+        assert results[BLOCKED][0][0] == "A-2"
+
+    @mock.patch("run_pipeline.load_pr_urls_from_logs", return_value={})
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_no_pr_url_stays_skipped(
+            self, mock_gen, mock_dag, mock_fetch, mock_logs):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1", jira_status="In Review")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert "Active" in results[SKIPPED][0][1]
