@@ -315,15 +315,22 @@ def invoke_codegen(epic_id, args):
             "--output-format", "text",
         ]
 
+    os.makedirs(args.log_dir, exist_ok=True)
+    log_path = os.path.join(args.log_dir, f"{epic_id}.log")
+
     print(f"--- Invoking codegen for {epic_id} ---")
     print(f"  Command: {' '.join(cmd)}")
+    print(f"  Log: {log_path}")
 
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=os.getcwd(),
-            timeout=args.timeout,
-        )
+        with open(log_path, "w", encoding="utf-8") as log_file:
+            result = subprocess.run(
+                cmd,
+                cwd=os.getcwd(),
+                timeout=args.timeout,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
         if result.returncode == 0:
             print(f"  Result: SUCCESS")
             return True
