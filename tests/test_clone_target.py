@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -140,6 +141,7 @@ class TestClone:
 
         assert result["status"] == "created"
         assert result["fork_url"] is None  # non-github URL, so no fork
+        assert result["fork_created"] is False
 
     def test_nonexistent_remote_fails(self, tmp_path):
         with pytest.raises(subprocess.CalledProcessError):
@@ -183,10 +185,11 @@ class TestSetupForkRemote:
 
     def test_adds_fork_remote(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
-        url = _setup_fork_remote(
+        result = _setup_fork_remote(
             repo, "https://github.com/org/myrepo.git", "ederign")
 
-        assert url == "https://github.com/ederign/myrepo.git"
+        assert result["fork_url"] == "https://github.com/ederign/myrepo.git"
+        assert result["fork_created"] is False
 
         out = subprocess.run(
             ["git", "remote", "-v"], cwd=repo,
@@ -198,13 +201,39 @@ class TestSetupForkRemote:
         repo = _init_repo(tmp_path / "repo")
         _setup_fork_remote(
             repo, "https://github.com/org/myrepo.git", "user1")
-        url = _setup_fork_remote(
+        result = _setup_fork_remote(
             repo, "https://github.com/org/myrepo.git", "user2")
 
-        assert url == "https://github.com/user2/myrepo.git"
+        assert result["fork_url"] == "https://github.com/user2/myrepo.git"
 
     def test_non_github_returns_none(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
-        url = _setup_fork_remote(
+        result = _setup_fork_remote(
             repo, "https://gitlab.com/org/repo.git", "ederign")
-        assert url is None
+        assert result["fork_url"] is None
+        assert result["fork_created"] is False
+
+    def test_with_token_uses_authenticated_url(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        with patch("github_utils.ensure_fork", return_value=("ederign/myrepo", False)):
+            result = _setup_fork_remote(
+                repo, "https://github.com/org/myrepo.git", "ederign",
+                token="ghp_test123")
+
+        assert result["fork_url"] == "https://github.com/ederign/myrepo.git"
+        assert result["fork_created"] is False
+
+        out = subprocess.run(
+            ["git", "remote", "-v"], cwd=repo,
+            capture_output=True, text=True,
+        )
+        assert "x-access-token" in out.stdout
+
+    def test_with_token_creates_fork(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        with patch("github_utils.ensure_fork", return_value=("newuser/myrepo", True)):
+            result = _setup_fork_remote(
+                repo, "https://github.com/org/myrepo.git", "newuser",
+                token="ghp_test123")
+
+        assert result["fork_created"] is True

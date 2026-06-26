@@ -26,6 +26,7 @@ Parse `$ARGUMENTS` for:
 - `--max-iterations N` — default 3
 - `--dry-run` — produce diff but do not create PR
 - `--fork-owner USER` — GitHub username for fork remote
+- `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Enables: authenticated clone, fork creation, push to fork. Required for CI environments without `gh` CLI.
 - `--checks lint,test,typecheck` — which validation checks to run (default: all)
 
 ## Autonomous Operation
@@ -92,10 +93,13 @@ python3 scripts/frontmatter.py set artifacts/epic-tasks/${EPIC_ID}.md status=InP
 ### Step 3: Clone Target Repo
 
 ```bash
-python3 scripts/clone_target.py <target_repo_url> ${EPIC_ID} --clean [--fork-owner USER]
+python3 scripts/clone_target.py <target_repo_url> ${EPIC_ID} --clean [--fork-owner USER] [--gh-token-var EPIC_CODEGEN_GITHUB_TOKEN]
 ```
 
 This clones into `.target-repo/`, creates branch `epic/${EPIC_ID}`.
+If `--gh-token-var` is set: clones with token auth (handles private repos),
+creates the fork if it doesn't exist, and configures the fork remote with
+push credentials embedded in the URL.
 
 ### Step 4: Validate Target Repo
 
@@ -331,9 +335,17 @@ Read the scoring result:
 - Save final diff: `cp v${VERSION}/diff.patch final-diff.patch`
 - Update state: `status=completed`
 - Update epic-task: `status=Generated codegen_branch=epic/${EPIC_ID}`
-- If not `--dry-run`: report that a PR could be created (but do NOT create
-  it — always ask the user first)
-- Report success with scores
+- If `--fork-owner` is set and not `--dry-run`, push and create PR:
+  ```bash
+  python3 scripts/push_to_fork.py .target-repo/ epic/${EPIC_ID} --json
+  python3 scripts/create_pr.py <upstream_slug> <fork_owner> epic/${EPIC_ID} \
+      --title "${EPIC_ID}: <epic title>" \
+      --body "<scores summary + link to codegen spec>" \
+      --gh-token-var EPIC_CODEGEN_GITHUB_TOKEN --json
+  ```
+  The PR targets the upstream repo's default branch (auto-detected).
+  Update epic-task: `pr_url=<html_url from result>`
+- Report success with scores and PR URL
 
 **near-miss** (weighted avg >= 7.5, at most one dimension 5.0-5.9):
 - Treat same as fail — iterate to fix
@@ -517,7 +529,6 @@ In all error cases: update state to `status=error`, update epic-task to
 
 ## Rules
 
-- Do not create a PR without explicit user approval
 - Do not push to non-fork remotes
 - Do not commit secrets, tokens, or credentials
 - Do not push HTML reports (they may contain sensitive data)

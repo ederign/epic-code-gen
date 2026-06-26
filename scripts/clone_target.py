@@ -2,10 +2,12 @@
 """Clone a target repo and set up an epic branch for code generation.
 
 Handles: fresh clone, fork remote (optional), epic branch creation.
+Supports token-based auth for CI environments (no gh CLI needed).
 
 Usage:
     python3 scripts/clone_target.py <repo-url> <epic-id> [--dest .target-repo]
     python3 scripts/clone_target.py <repo-url> <epic-id> --fork-owner ederign
+    python3 scripts/clone_target.py <repo-url> <epic-id> --fork-owner ederign --gh-token-var EPIC_CODEGEN_GITHUB_TOKEN
     python3 scripts/clone_target.py <repo-url> <epic-id> --clean
 """
 
@@ -16,6 +18,7 @@ import shutil
 import subprocess
 import sys
 
+import github_utils
 
 DEFAULT_DEST = ".target-repo"
 
@@ -37,7 +40,8 @@ def _run_git(args, cwd=None, check=True):
     return result.stdout.strip(), result.stderr.strip(), result.returncode
 
 
-def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False):
+def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
+          gh_token_var=None):
     """Clone a target repo and create an epic branch.
 
     Args:
@@ -46,18 +50,24 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False):
         dest: clone destination (default: .target-repo)
         fork_owner: GitHub username for fork remote (optional)
         clean: if True, delete existing clone first
+        gh_token_var: env var name for GitHub token (enables auth clone + fork creation)
 
     Returns:
-        dict with: dest, branch, upstream_url, fork_url, status
+        dict with: dest, branch, upstream_url, fork_url, fork_created, status
     """
     dest = dest or DEFAULT_DEST
     branch = f"epic/{epic_id}"
+
+    token = None
+    if gh_token_var:
+        token = github_utils.require_env(gh_token_var)
 
     result = {
         "dest": dest,
         "branch": branch,
         "upstream_url": repo_url,
         "fork_url": None,
+        "fork_created": False,
         "status": "created",
     }
 
@@ -71,19 +81,29 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False):
             result["status"] = "existing"
             _ensure_branch(dest, branch)
             if fork_owner:
-                result["fork_url"] = _setup_fork_remote(dest, repo_url, fork_owner)
+                fork_result = _setup_fork_remote(
+                    dest, repo_url, fork_owner, token)
+                result["fork_url"] = fork_result["fork_url"]
+                result["fork_created"] = fork_result["fork_created"]
             return result
         raise ValueError(
             f"Directory {dest} exists but points to a different repo. "
             f"Use --clean to force a fresh clone."
         )
 
-    _run_git(["git", "clone", repo_url, dest])
+    clone_url = repo_url
+    slug = github_utils.extract_slug(repo_url)
+    if token and slug:
+        clone_url = github_utils.authenticated_url(slug, token)
+
+    _run_git(["git", "clone", clone_url, dest])
 
     _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
     if fork_owner:
-        result["fork_url"] = _setup_fork_remote(dest, repo_url, fork_owner)
+        fork_result = _setup_fork_remote(dest, repo_url, fork_owner, token)
+        result["fork_url"] = fork_result["fork_url"]
+        result["fork_created"] = fork_result["fork_created"]
 
     return result
 
@@ -116,25 +136,39 @@ def _ensure_branch(dest, branch):
         _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
 
-def _setup_fork_remote(dest, upstream_url, fork_owner):
+def _setup_fork_remote(dest, upstream_url, fork_owner, token=None):
     """Add fork remote pointing to the fork owner's copy.
 
-    Returns the fork URL.
+    If token is provided:
+    - Creates the fork via GitHub API if it doesn't exist
+    - Uses authenticated URL for push access
+
+    Returns dict with: fork_url (display URL), fork_created.
     """
     slug = _extract_slug(upstream_url)
     if not slug:
-        return None
+        return {"fork_url": None, "fork_created": False}
 
-    repo_name = slug.split("/")[-1]
-    fork_url = f"https://github.com/{fork_owner}/{repo_name}.git"
+    upstream_owner, repo_name = slug.split("/")
+    fork_created = False
+
+    if token:
+        _, fork_created = github_utils.ensure_fork(
+            upstream_owner, repo_name, fork_owner, token)
+        fork_slug = f"{fork_owner}/{repo_name}"
+        git_url = github_utils.authenticated_url(fork_slug, token)
+    else:
+        git_url = f"https://github.com/{fork_owner}/{repo_name}.git"
+
+    display_url = github_utils.sanitized_url(f"{fork_owner}/{repo_name}")
 
     existing, _, _ = _run_git(["git", "remote"], cwd=dest, check=False)
     if "fork" in existing.split("\n"):
-        _run_git(["git", "remote", "set-url", "fork", fork_url], cwd=dest)
+        _run_git(["git", "remote", "set-url", "fork", git_url], cwd=dest)
     else:
-        _run_git(["git", "remote", "add", "fork", fork_url], cwd=dest)
+        _run_git(["git", "remote", "add", "fork", git_url], cwd=dest)
 
-    return fork_url
+    return {"fork_url": display_url, "fork_created": fork_created}
 
 
 def main():
@@ -146,6 +180,8 @@ def main():
                         help=f"Clone destination (default: {DEFAULT_DEST})")
     parser.add_argument("--fork-owner", default=None,
                         help="GitHub username for fork remote")
+    parser.add_argument("--gh-token-var", default=None,
+                        help="Env var name for GitHub token (default: EPIC_CODEGEN_GITHUB_TOKEN)")
     parser.add_argument("--clean", action="store_true",
                         help="Delete existing clone first")
     parser.add_argument("--json", action="store_true",
@@ -159,6 +195,7 @@ def main():
             dest=args.dest,
             fork_owner=args.fork_owner,
             clean=args.clean,
+            gh_token_var=args.gh_token_var,
         )
 
         if args.json:
@@ -170,9 +207,12 @@ def main():
             print(f"Status: {result['status']}")
             if result["fork_url"]:
                 print(f"Fork remote: {result['fork_url']}")
+            if result["fork_created"]:
+                print("Fork: newly created")
 
         sys.exit(0)
-    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as e:
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError,
+            EnvironmentError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
