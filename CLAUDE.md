@@ -161,8 +161,10 @@ Phase 2 uses the Superpowers plugin's `subagent-driven-development` (SDD)
 skill for implementation. SDD handles: per-task implementer dispatch,
 per-task review, fix loops, progress ledger, final code review.
 
-The orchestrator IS the human partner — epic ACs resolve all SDD checkpoints
-autonomously. SDD artifacts land in `.target-repo/.superpowers/sdd/`.
+The orchestrator IS the human partner — epic ACs resolve all 12 SDD
+checkpoints autonomously (6 human-facing overrides + 6 controller
+clarifications). See SKILL.md **Autonomous Operation** for the full mapping.
+SDD artifacts land in `.target-repo/.superpowers/sdd/`.
 
 SDD scripts (permitted in settings.json):
 - `task-brief` — extract task text to file for implementer dispatch

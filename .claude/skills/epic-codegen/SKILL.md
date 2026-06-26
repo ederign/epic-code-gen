@@ -31,15 +31,29 @@ Parse `$ARGUMENTS` for:
 ## Autonomous Operation
 
 You ARE the human partner. The epic-task ACs are your requirements.
+The strategy document and epic body are your domain knowledge.
+Never stop for user input — resolve every SDD checkpoint yourself.
+
+### Overrides — SDD would normally stop for human input
 
 | SDD checkpoint | Your resolution |
 |---|---|
-| Pre-flight plan conflicts | Resolve against ACs. ACs win over task text. |
-| BLOCKED | Answer from epic body + strategy + repo context. Escalate model tier before giving up. Do NOT stop for user input. |
-| NEEDS_CONTEXT | Answer from epic/strategy/repo. You hold all context. |
-| Plan-mandated findings | ACs are authoritative. AC requires it → dismiss finding. AC silent → accept finding. |
-| Finishing | Do NOT invoke `finishing-a-development-branch`. Proceed to Phase 3. |
-| Implementer questions | Answer from spec, epic body, strategy, repo context. |
+| Pre-flight plan conflicts | Resolve yourself. ACs are authoritative: AC requires it → plan wins over conflicting task. AC silent → accept finding. Log resolutions in progress ledger. |
+| Implementer questions | Answer from: (1) codegen-spec.md, (2) epic body, (3) strategy doc, (4) target repo code/CLAUDE.md. Re-dispatch with your answer. |
+| BLOCKED — plan wrong (step 4) | Do NOT escalate. Steps 1-3 unchanged. If plan contradicts ACs, fix the plan. If unfixable, mark task blocked in ledger, skip it, continue remaining tasks. Log blocker for Phase 3. |
+| NEEDS_CONTEXT | Answer from epic body + strategy + spec + repo conventions. Re-dispatch with your answer. |
+| Plan-mandated findings | ACs are authoritative. AC requires the behavior → dismiss finding. AC silent → accept finding, dispatch fix. |
+| Finishing | Do NOT invoke `finishing-a-development-branch`. Proceed directly to Step 13. |
+
+### Clarifications — SDD handles internally, autonomous judgment needed
+
+| SDD checkpoint | Your approach |
+|---|---|
+| Continuous execution | Execute all tasks without stopping. No progress-check prompts. |
+| DONE_WITH_CONCERNS | Verify concerns against ACs. AC satisfied → note concern, proceed to review. AC violated → re-dispatch implementer. |
+| Reviewer ⚠️ items | Verify each against ACs. AC covers it → resolved. Real gap → failed spec review, send back to implementer. |
+| Fix report validation | If incomplete (missing tests/command/output), re-dispatch fix subagent. Do not re-dispatch reviewer until all three present. |
+| Progress ledger | Follow SDD's ledger exactly at `.superpowers/sdd/progress.md`. Check at start, append completions, trust after compaction. |
 
 ## Phase 1: Spec & Plan Generation
 
