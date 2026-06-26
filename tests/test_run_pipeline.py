@@ -790,7 +790,7 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
-    def test_no_review_transition_on_failure(
+    def test_failure_rolls_back_to_original_status(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
@@ -803,8 +803,9 @@ class TestProcessStrategyTransitions:
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
-        assert len(calls) == 1
+        assert len(calls) == 2
         assert calls[0] == mock.call("s", "u", "t", "A-1", "In Progress")
+        assert calls[1] == mock.call("s", "u", "t", "A-1", "New")
 
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.fetch_children")

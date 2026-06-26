@@ -312,7 +312,7 @@ def invoke_codegen(epic_id, args):
         cmd = [
             "claude", "-p", skill_args,
             "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
+            "--output-format", "text",
         ]
 
     print(f"--- Invoking codegen for {epic_id} ---")
@@ -438,6 +438,8 @@ def process_strategy(strategy_key, server, user, token, args):
         epic_transitions.append({
             "to": "In Progress", "success": ok})
 
+        original_status = all_epics_by_key[epic_id].get("jira_status", "")
+
         success = invoke_codegen(epic_id, args)
         if success:
             results[PROCESSED].append((epic_id, "codegen completed"))
@@ -452,6 +454,11 @@ def process_strategy(strategy_key, server, user, token, args):
                 link_pr_to_jira(server, user, token, epic_id, pr_url)
         else:
             results[FAILED].append((epic_id, "codegen failed"))
+            if original_status:
+                ok, _ = transition_issue(
+                    server, user, token, epic_id, original_status)
+                epic_transitions.append({
+                    "to": original_status, "success": ok})
 
         transitions_log[epic_id] = epic_transitions
         handled_keys.add(epic_id)
