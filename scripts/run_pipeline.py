@@ -46,6 +46,104 @@ SKIPPED = "skipped"
 BLOCKED = "blocked"
 FAILED = "failed"
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
+
+
+def load_repo_mapping(path=None):
+    """Load the keyword-to-repo mapping from JSON.
+
+    Returns:
+        dict: {repo: {"keywords": [...]}} or empty dict if file missing.
+    """
+    if path is None:
+        path = os.path.join(_CONFIG_DIR, "repo_mapping.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def resolve_target_repo(epic_data, mapping, prompt_path=None):
+    """Determine the target repo for an epic.
+
+    First tries keyword matching against epic title + body.
+    Falls back to LLM if no match or ambiguous.
+
+    Returns:
+        str: repo identifier or empty string.
+    """
+    if not mapping:
+        return ""
+
+    text = " ".join([
+        epic_data.get("title", ""),
+        epic_data.get("body", ""),
+    ]).lower()
+
+    matches = []
+    for repo, config in mapping.items():
+        keywords = config.get("keywords", [])
+        if any(kw.lower() in text for kw in keywords):
+            matches.append(repo)
+
+    if len(matches) == 1:
+        return matches[0]
+
+    return resolve_repo_via_llm(epic_data, mapping, prompt_path)
+
+
+def resolve_repo_via_llm(epic_data, mapping, prompt_path=None):
+    """Ask Claude to determine the target repo.
+
+    Returns:
+        str: repo identifier or empty string.
+    """
+    if prompt_path is None:
+        prompt_path = os.path.join(_CONFIG_DIR, "repo_resolve_prompt.md")
+    if not os.path.isfile(prompt_path):
+        print(f"  Warning: prompt template not found: {prompt_path}",
+              file=sys.stderr)
+        return ""
+
+    with open(prompt_path, encoding="utf-8") as f:
+        template = f.read()
+
+    repos_text = "\n".join(
+        f"- **{repo}**: keywords: {', '.join(cfg.get('keywords', []))}"
+        for repo, cfg in mapping.items()
+    )
+
+    prompt = template.format(
+        epic_title=epic_data.get("title", ""),
+        epic_description=epic_data.get("body", "")[:2000],
+        available_repos=repos_text,
+    )
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt,
+             "--dangerously-skip-permissions",
+             "--output-format", "text"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            print(f"  Warning: LLM repo resolution failed (exit {result.returncode})",
+                  file=sys.stderr)
+            return ""
+
+        answer = result.stdout.strip()
+        if answer == "NONE":
+            return ""
+        if answer in mapping:
+            return answer
+        print(f"  Warning: LLM returned unknown repo: {answer}",
+              file=sys.stderr)
+        return ""
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"  Warning: LLM repo resolution error: {e}", file=sys.stderr)
+        return ""
+
 
 def clean_artifacts(output_dir):
     """Wipe epic-tasks and strategies directories for a fresh fetch.
@@ -141,6 +239,16 @@ def process_strategy(strategy_key, server, user, token, args):
 
     dag = build_dependency_dag(issues)
     epics = [issue_to_epic_data(issue, strategy_key, dag) for issue in issues]
+
+    mapping = load_repo_mapping()
+    for epic in epics:
+        repo = resolve_target_repo(epic, mapping)
+        if repo:
+            epic["target_repo"] = repo
+            print(f"  {epic['epic_id']}: target_repo → {repo}")
+        else:
+            print(f"  {epic['epic_id']}: target_repo unresolved")
+
     all_epics_by_key = {e["epic_id"]: e for e in epics}
 
     for epic in epics:

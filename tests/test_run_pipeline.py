@@ -18,6 +18,9 @@ from run_pipeline import (
     build_run_log,
     clean_artifacts,
     find_eligible,
+    load_repo_mapping,
+    resolve_repo_via_llm,
+    resolve_target_repo,
     invoke_codegen,
     parse_args,
     print_summary,
@@ -556,3 +559,120 @@ class TestParseArgs:
         assert args.timeout == 600
         assert args.no_report is True
         assert args.no_strategy is True
+
+
+# ─── TestLoadRepoMapping ─────────────────────────────────────────────────────
+
+class TestLoadRepoMapping:
+
+    def test_loads_json_file(self, tmp_path):
+        mapping = {"org/repo": {"keywords": ["test"]}}
+        path = tmp_path / "mapping.json"
+        with open(path, "w") as f:
+            json.dump(mapping, f)
+
+        result = load_repo_mapping(str(path))
+        assert result == mapping
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        result = load_repo_mapping(str(tmp_path / "nonexistent.json"))
+        assert result == {}
+
+
+# ─── TestResolveTargetRepo ───────────────────────────────────────────────────
+
+class TestResolveTargetRepo:
+
+    _MAPPING = {
+        "opendatahub-io/odh-dashboard": {
+            "keywords": ["dashboard", "frontend", "patternfly", "ui"]
+        },
+    }
+
+    def test_matches_keyword_in_title(self):
+        epic = _epic("A-1", title="Update dashboard component")
+        result = resolve_target_repo(epic, self._MAPPING)
+        assert result == "opendatahub-io/odh-dashboard"
+
+    def test_matches_keyword_in_body(self):
+        epic = _epic("A-1", title="Some feature")
+        epic["body"] = "This uses PatternFly components for the form"
+        result = resolve_target_repo(epic, self._MAPPING)
+        assert result == "opendatahub-io/odh-dashboard"
+
+    def test_case_insensitive(self):
+        epic = _epic("A-1", title="DASHBOARD changes needed")
+        result = resolve_target_repo(epic, self._MAPPING)
+        assert result == "opendatahub-io/odh-dashboard"
+
+    def test_empty_mapping_returns_empty(self):
+        epic = _epic("A-1", title="Dashboard work")
+        result = resolve_target_repo(epic, {})
+        assert result == ""
+
+    @mock.patch("run_pipeline.resolve_repo_via_llm", return_value="")
+    def test_no_match_calls_llm(self, mock_llm):
+        epic = _epic("A-1", title="Update operator controller")
+        result = resolve_target_repo(epic, self._MAPPING)
+        mock_llm.assert_called_once()
+        assert result == ""
+
+    @mock.patch("run_pipeline.resolve_repo_via_llm",
+                return_value="opendatahub-io/odh-dashboard")
+    def test_multiple_matches_calls_llm(self, mock_llm):
+        mapping = {
+            "opendatahub-io/odh-dashboard": {"keywords": ["dashboard"]},
+            "opendatahub-io/other-repo": {"keywords": ["dashboard"]},
+        }
+        epic = _epic("A-1", title="Fix dashboard bug")
+        result = resolve_target_repo(epic, mapping)
+        mock_llm.assert_called_once()
+        assert result == "opendatahub-io/odh-dashboard"
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_llm_returns_valid_repo(self, mock_run, tmp_path):
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text(
+            "Title: {epic_title}\nDesc: {epic_description}\n"
+            "Repos: {available_repos}")
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout="opendatahub-io/odh-dashboard\n")
+        epic = _epic("A-1", title="Some operator work")
+
+        result = resolve_repo_via_llm(
+            epic, self._MAPPING, str(prompt_file))
+        assert result == "opendatahub-io/odh-dashboard"
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_llm_returns_none(self, mock_run, tmp_path):
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text(
+            "Title: {epic_title}\nDesc: {epic_description}\n"
+            "Repos: {available_repos}")
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout="NONE\n")
+        epic = _epic("A-1", title="Unknown work")
+
+        result = resolve_repo_via_llm(
+            epic, self._MAPPING, str(prompt_file))
+        assert result == ""
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_llm_returns_unknown_repo(self, mock_run, tmp_path):
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text(
+            "Title: {epic_title}\nDesc: {epic_description}\n"
+            "Repos: {available_repos}")
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout="some/unknown-repo\n")
+        epic = _epic("A-1", title="Unknown work")
+
+        result = resolve_repo_via_llm(
+            epic, self._MAPPING, str(prompt_file))
+        assert result == ""
+
+    def test_llm_missing_prompt_returns_empty(self):
+        epic = _epic("A-1", title="Unknown work")
+        result = resolve_repo_via_llm(
+            epic, self._MAPPING, "/nonexistent/prompt.md")
+        assert result == ""
