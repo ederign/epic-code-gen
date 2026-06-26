@@ -80,6 +80,12 @@ class TestEpicTaskSchema:
         errors = validate(data, "epic-task")
         assert errors == []
 
+    def test_pr_url_field_accepted(self):
+        data = self._valid_data(
+            pr_url="https://github.com/org/repo/pull/42")
+        errors = validate(data, "epic-task")
+        assert errors == []
+
     def test_invalid_status_enum(self):
         errors = validate(self._valid_data(status="Unknown"), "epic-task")
         assert any("not in" in e for e in errors)

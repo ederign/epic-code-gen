@@ -18,7 +18,9 @@ from run_pipeline import (
     build_run_log,
     clean_artifacts,
     find_eligible,
+    link_pr_to_jira,
     load_repo_mapping,
+    read_pr_url,
     resolve_repo_via_llm,
     resolve_target_repo,
     transition_issue,
@@ -159,7 +161,7 @@ class TestProcessStrategy:
             _epic("A-2", dependencies=["A-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[PROCESSED]) == 1
@@ -187,7 +189,7 @@ class TestProcessStrategy:
             _epic("A-1"), _epic("A-2"),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[PROCESSED]) == 2
@@ -213,7 +215,7 @@ class TestProcessStrategy:
             _epic("A-2", dependencies=["A-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[FAILED]) == 1
@@ -238,7 +240,7 @@ class TestProcessStrategy:
             _epic("A-2", jira_status="Closed"),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[SKIPPED]) == 2
@@ -257,7 +259,7 @@ class TestProcessStrategy:
         with mock.patch("run_pipeline.issue_to_epic_data",
                         return_value=_epic("A-1")):
             args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[PROCESSED]) == 1
@@ -267,11 +269,12 @@ class TestProcessStrategy:
     def test_no_children(self, mock_fetch):
         """Strategy with no children → empty results."""
         args = _make_args(output_dir="/tmp/test-artifacts")
-        epics, results, transitions_log = process_strategy(
+        epics, results, transitions_log, pr_urls = process_strategy(
             "RHAISTRAT-1", "s", "u", "t", args)
         assert epics == []
         assert all(len(v) == 0 for v in results.values())
         assert transitions_log == {}
+        assert pr_urls == {}
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.invoke_codegen")
@@ -298,7 +301,7 @@ class TestProcessStrategy:
         ]):
             mock_invoke.side_effect = [True, False]
             args = _make_args(output_dir="/tmp/test-artifacts")
-            epics, results, _ = process_strategy(
+            epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[SKIPPED]) == 1
@@ -434,7 +437,7 @@ class TestBuildRunLog:
         }
         transitions_log = {"A-1": [{"to": "In Progress", "success": True}]}
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
-        log = build_run_log({"RHAISTRAT-1": (epics, results, transitions_log)}, start)
+        log = build_run_log({"RHAISTRAT-1": (epics, results, transitions_log, {})}, start)
 
         strat = log["strategies"]["RHAISTRAT-1"]
         assert "A-1" in strat["epics"]
@@ -453,7 +456,7 @@ class TestBuildRunLog:
             FAILED: [],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
-        log = build_run_log({"RHAISTRAT-1": (epics, results, {})}, start)
+        log = build_run_log({"RHAISTRAT-1": (epics, results, {}, {})}, start)
 
         summary = log["strategies"]["RHAISTRAT-1"]["summary"]
         assert summary[PROCESSED] == 1
@@ -475,8 +478,8 @@ class TestBuildRunLog:
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log({
-            "RHAISTRAT-1": (epics_a, results_a, {}),
-            "RHAISTRAT-2": (epics_b, results_b, {}),
+            "RHAISTRAT-1": (epics_a, results_a, {}, {}),
+            "RHAISTRAT-2": (epics_b, results_b, {}, {}),
         }, start)
 
         assert "RHAISTRAT-1" in log["strategies"]
@@ -496,7 +499,7 @@ class TestBuildRunLog:
             BLOCKED: [], FAILED: [],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
-        log = build_run_log({"RHAISTRAT-1": (epics, results, {})}, start)
+        log = build_run_log({"RHAISTRAT-1": (epics, results, {}, {})}, start)
 
         assert log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]["result"] == "dry-run"
 
@@ -832,7 +835,7 @@ class TestProcessStrategyTransitions:
         with mock.patch("run_pipeline.issue_to_epic_data",
                         return_value=_epic("A-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            _, _, transitions_log = process_strategy(
+            _, _, transitions_log, _ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert "A-1" in transitions_log
@@ -860,7 +863,7 @@ class TestBuildRunLogTransitions:
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log(
-            {"RHAISTRAT-1": (epics, results, transitions_log)}, start)
+            {"RHAISTRAT-1": (epics, results, transitions_log, {})}, start)
 
         epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
         assert epic_log["transitions"] == transitions_log["A-1"]
@@ -874,7 +877,154 @@ class TestBuildRunLogTransitions:
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log(
-            {"RHAISTRAT-1": (epics, results, {})}, start)
+            {"RHAISTRAT-1": (epics, results, {}, {})}, start)
 
         epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
         assert epic_log["transitions"] == []
+
+
+# ─── TestReadPrUrl ──────────────────────────────────────────────────────────
+
+class TestReadPrUrl:
+
+    def test_reads_pr_url_from_frontmatter(self, tmp_path):
+        tasks_dir = tmp_path / "epic-tasks"
+        tasks_dir.mkdir()
+        task_file = tasks_dir / "RHOAIENG-100.md"
+        task_file.write_text(
+            "---\n"
+            "epic_id: RHOAIENG-100\n"
+            "title: Test Epic\n"
+            "strategy_key: RHAISTRAT-1\n"
+            "target_repo: org/repo\n"
+            "target_branch: main\n"
+            "status: Generated\n"
+            "pr_url: https://github.com/org/repo/pull/42\n"
+            "---\n"
+            "Body text\n"
+        )
+        result = read_pr_url("RHOAIENG-100", str(tmp_path))
+        assert result == "https://github.com/org/repo/pull/42"
+
+    def test_returns_none_when_no_pr_url(self, tmp_path):
+        tasks_dir = tmp_path / "epic-tasks"
+        tasks_dir.mkdir()
+        task_file = tasks_dir / "RHOAIENG-100.md"
+        task_file.write_text(
+            "---\n"
+            "epic_id: RHOAIENG-100\n"
+            "title: Test Epic\n"
+            "strategy_key: RHAISTRAT-1\n"
+            "target_repo: org/repo\n"
+            "target_branch: main\n"
+            "status: Pending\n"
+            "---\n"
+            "Body text\n"
+        )
+        result = read_pr_url("RHOAIENG-100", str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_file_missing(self, tmp_path):
+        result = read_pr_url("NONEXISTENT-1", str(tmp_path))
+        assert result is None
+
+
+# ─── TestLinkPrToJira ───────────────────────────────────────────────────────
+
+class TestLinkPrToJira:
+
+    @mock.patch("run_pipeline.add_comment")
+    @mock.patch("run_pipeline.markdown_to_adf",
+                return_value={"type": "doc", "content": []})
+    def test_posts_comment_with_pr_url(self, mock_adf, mock_comment):
+        result = link_pr_to_jira(
+            "s", "u", "t", "A-1",
+            "https://github.com/org/repo/pull/42")
+        assert result is True
+        mock_adf.assert_called_once()
+        assert "https://github.com/org/repo/pull/42" in mock_adf.call_args[0][0]
+        mock_comment.assert_called_once()
+
+    @mock.patch("run_pipeline.add_comment",
+                side_effect=Exception("403 Forbidden"))
+    @mock.patch("run_pipeline.markdown_to_adf",
+                return_value={"type": "doc", "content": []})
+    def test_handles_api_error(self, mock_adf, mock_comment):
+        result = link_pr_to_jira(
+            "s", "u", "t", "A-1",
+            "https://github.com/org/repo/pull/42")
+        assert result is False
+
+
+# ─── TestProcessStrategy PR linking ─────────────────────────────────────────
+
+class TestProcessStrategyPrLinking:
+
+    @mock.patch("run_pipeline.link_pr_to_jira", return_value=True)
+    @mock.patch("run_pipeline.read_pr_url",
+                return_value="https://github.com/org/repo/pull/42")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_links_pr_after_successful_codegen(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            mock_trans, mock_read_pr, mock_link):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, _, _, pr_urls = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        mock_link.assert_called_once_with(
+            "s", "u", "t", "A-1",
+            "https://github.com/org/repo/pull/42")
+        assert pr_urls == {"A-1": "https://github.com/org/repo/pull/42"}
+
+    @mock.patch("run_pipeline.link_pr_to_jira")
+    @mock.patch("run_pipeline.read_pr_url", return_value=None)
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_no_link_when_no_pr_url(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            mock_trans, mock_read_pr, mock_link):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, _, _, pr_urls = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        mock_link.assert_not_called()
+        assert pr_urls == {}
+
+
+# ─── TestBuildRunLog PR URL ─────────────────────────────────────────────────
+
+class TestBuildRunLogPrUrl:
+
+    def test_pr_url_in_run_log(self):
+        from datetime import datetime, timezone
+        epics = [_epic("A-1")]
+        results = {
+            PROCESSED: [("A-1", "codegen completed")],
+            SKIPPED: [], BLOCKED: [], FAILED: [],
+        }
+        pr_urls = {"A-1": "https://github.com/org/repo/pull/42"}
+        start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
+        log = build_run_log(
+            {"RHAISTRAT-1": (epics, results, {}, pr_urls)}, start)
+
+        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
+        assert epic_log["pr_url"] == "https://github.com/org/repo/pull/42"

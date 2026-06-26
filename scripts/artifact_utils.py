@@ -88,6 +88,11 @@ SCHEMAS = {
             "required": False,
             "default": None,
         },
+        "pr_url": {
+            "type": "string",
+            "required": False,
+            "default": None,
+        },
         "jira_status": {
             "type": "string",
             "required": False,
