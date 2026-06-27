@@ -82,12 +82,15 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
             ["git", "remote", "-v"], cwd=dest, check=False)
         if repo_url in existing_remotes or _url_matches(repo_url, existing_remotes):
             result["status"] = "existing"
-            _ensure_branch(dest, branch)
             if fork_owner:
                 fork_result = _setup_fork_remote(
                     dest, repo_url, fork_owner, token)
                 result["fork_url"] = fork_result["fork_url"]
                 result["fork_created"] = fork_result["fork_created"]
+            slug = github_utils.extract_slug(repo_url)
+            repo_name = slug.split("/")[1] if slug else None
+            _sync_with_upstream(dest, fork_owner, repo_name, token)
+            _ensure_branch(dest, branch)
             return result
         raise ValueError(
             f"Directory {dest} exists but points to a different repo. "
@@ -108,12 +111,15 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
     if token:
         _configure_git_identity(dest, token)
 
-    _run_git(["git", "checkout", "-b", branch], cwd=dest)
-
     if fork_owner:
         fork_result = _setup_fork_remote(dest, repo_url, fork_owner, token)
         result["fork_url"] = fork_result["fork_url"]
         result["fork_created"] = fork_result["fork_created"]
+
+    repo_name = slug.split("/")[1] if slug else None
+    _sync_with_upstream(dest, fork_owner, repo_name, token)
+
+    _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
     return result
 
@@ -145,13 +151,58 @@ def _configure_git_identity(dest, token):
     _run_git(["git", "config", "user.email", email], cwd=dest)
 
 
+def _default_branch(dest):
+    """Detect the default branch name (main or master)."""
+    stdout, _, _ = _run_git(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        cwd=dest, check=False)
+    if stdout:
+        return stdout.split("/")[-1]
+    for candidate in ("main", "master"):
+        _, _, rc = _run_git(
+            ["git", "rev-parse", "--verify", f"origin/{candidate}"],
+            cwd=dest, check=False)
+        if rc == 0:
+            return candidate
+    return "main"
+
+
+def _sync_with_upstream(dest, fork_owner=None, repo_name=None, token=None):
+    """Fetch upstream and sync fork if applicable.
+
+    For fork repos, also syncs via GitHub API so the fork's default
+    branch matches upstream before we fetch.
+    """
+    if fork_owner and repo_name and token:
+        default = _default_branch(dest)
+        try:
+            github_utils.sync_fork(fork_owner, repo_name, token, default)
+        except Exception:
+            pass
+
+    _run_git(["git", "fetch", "--all", "--prune"], cwd=dest)
+
+
+def _has_remote(dest, name="origin"):
+    """Check if a remote exists."""
+    stdout, _, _ = _run_git(["git", "remote"], cwd=dest, check=False)
+    return name in stdout.split("\n")
+
+
 def _ensure_branch(dest, branch):
-    """Create or switch to the epic branch."""
+    """Create or switch to the epic branch, based on latest upstream."""
     stdout, _, rc = _run_git(
         ["git", "branch", "--list", branch], cwd=dest, check=False)
     if branch in stdout:
         _run_git(["git", "checkout", branch], cwd=dest)
+        if _has_remote(dest):
+            default = _default_branch(dest)
+            _run_git(
+                ["git", "reset", "--hard", f"origin/{default}"], cwd=dest)
     else:
+        if _has_remote(dest):
+            default = _default_branch(dest)
+            _run_git(["git", "checkout", f"origin/{default}"], cwd=dest)
         _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
 

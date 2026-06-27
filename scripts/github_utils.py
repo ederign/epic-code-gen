@@ -190,6 +190,19 @@ def ensure_fork(upstream_owner, upstream_repo, fork_owner, token):
     return slug, True
 
 
+def sync_fork(fork_owner, repo, token, branch="main"):
+    """Sync a fork's branch with its upstream parent via GitHub API.
+
+    Uses POST /repos/{owner}/{repo}/merge-upstream.
+    Returns True if updated, False if already up-to-date.
+    """
+    result = api_call(
+        f"/repos/{fork_owner}/{repo}/merge-upstream",
+        token, body={"branch": branch}, method="POST",
+    )
+    return result.get("merge_type") != "none"
+
+
 def create_pull_request(upstream_owner, upstream_repo, head_owner, branch,
                         base, title, body, token):
     """Create a pull request from fork branch to upstream base.
