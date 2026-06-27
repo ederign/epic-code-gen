@@ -797,6 +797,8 @@ def _render_epic_detail(epic_id, artifacts, pr_url=None):
             '</div></td></tr>')
 
     meta = artifacts.get("metadata", {})
+    if not pr_url:
+        pr_url = meta.get("pr_url")
     scores = artifacts.get("scores")
     status = meta.get("status", "unknown")
     final_score = meta.get("final_score", "—")
