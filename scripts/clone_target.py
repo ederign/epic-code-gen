@@ -94,6 +94,10 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
             f"Use --clean to force a fresh clone."
         )
 
+    if ("://" not in repo_url and "@" not in repo_url
+            and not repo_url.startswith("/") and repo_url.count("/") == 1):
+        repo_url = f"https://github.com/{repo_url}.git"
+
     clone_url = repo_url
     slug = github_utils.extract_slug(repo_url)
     if token and slug:
