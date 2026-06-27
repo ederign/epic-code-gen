@@ -643,6 +643,25 @@ def process_strategy(strategy_key, server, user, token, args):
             handled_keys.add(epic_id)
             continue
 
+        run_meta = os.path.join(
+            args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
+        existing_status = _read_run_status(run_meta)
+        if existing_status == "completed":
+            print(f"  {epic_id}: REUSING existing completed run")
+            results[PROCESSED].append((epic_id, "reused completed run"))
+            epic_transitions = []
+            ok, _ = transition_issue(
+                server, user, token, epic_id, "Review")
+            epic_transitions.append({
+                "to": "Review", "success": ok})
+            pr_url = read_pr_url(epic_id, args.output_dir)
+            if pr_url:
+                pr_urls[epic_id] = pr_url
+                link_pr_to_jira(server, user, token, epic_id, pr_url)
+            transitions_log[epic_id] = epic_transitions
+            handled_keys.add(epic_id)
+            continue
+
         print(f"  {epic_id}: ELIGIBLE — starting codegen")
         epic_transitions = []
 
