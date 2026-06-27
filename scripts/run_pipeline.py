@@ -787,8 +787,8 @@ def parse_args(argv=None):
                         help="Path to run-claude.sh (CI mode)")
     parser.add_argument("--max-iterations", type=int, default=None,
                         help="Pass --max-iterations to epic-codegen")
-    parser.add_argument("--fork-owner",
-                        help="Pass --fork-owner to epic-codegen")
+    parser.add_argument("--fork-owner", default="dora-the-ai-coder",
+                        help="Pass --fork-owner to epic-codegen (default: dora-the-ai-coder)")
     parser.add_argument("--no-clean", action="store_true",
                         help="Don't wipe artifacts before fetch")
     parser.add_argument("--output-dir", default="artifacts",
