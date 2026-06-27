@@ -197,7 +197,7 @@ def main():
     parser.add_argument("epic_id", help="Epic ID (e.g., RHAISTRAT-1749-E001)")
     parser.add_argument("--dest", default=DEFAULT_DEST,
                         help=f"Clone destination (default: {DEFAULT_DEST})")
-    parser.add_argument("--fork-owner", default=DEFAULT_FORK_OWNER,
+    parser.add_argument("--fork-owner", default=None,
                         help=f"GitHub username for fork remote (default: {DEFAULT_FORK_OWNER})")
     parser.add_argument("--gh-token-var", default=None,
                         help="Env var name for GitHub token (default: EPIC_CODEGEN_GITHUB_TOKEN)")
