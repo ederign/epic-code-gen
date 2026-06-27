@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -34,8 +35,9 @@ def _run_git(args, cwd=None, check=True):
         timeout=300,
     )
     if check and result.returncode != 0:
+        safe_args = [re.sub(r'://[^@]+@', '://***@', a) for a in args]
         raise subprocess.CalledProcessError(
-            result.returncode, args,
+            result.returncode, safe_args,
             output=result.stdout, stderr=result.stderr,
         )
     return result.stdout.strip(), result.stderr.strip(), result.returncode
