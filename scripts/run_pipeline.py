@@ -477,6 +477,18 @@ def _run_cmd(cmd, cwd=None, label=None, timeout=600):
         return False
 
 
+def _read_run_status(run_meta_path):
+    """Read status field from run-metadata.yaml without a YAML library."""
+    try:
+        with open(run_meta_path) as f:
+            for line in f:
+                if line.startswith("status:"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
 def invoke_codegen(epic_id, args):
     """Shell out to Claude for codegen. Returns True on success."""
     skill_args = f"/epic-codegen {epic_id}"
@@ -506,14 +518,26 @@ def invoke_codegen(epic_id, args):
             timeout=args.timeout,
             env=env,
         )
+
+        run_meta = os.path.join(
+            args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
+        has_artifacts = os.path.exists(run_meta)
+
+        if has_artifacts:
+            status = _read_run_status(run_meta)
+            if status == "completed":
+                if result.returncode != 0:
+                    print(f"  Note: exit code {result.returncode} but "
+                          f"artifacts show completed — treating as success")
+                print(f"  Result: SUCCESS")
+                return True
+
         if result.returncode != 0:
             print(f"  Result: FAILED (exit code {result.returncode})",
                   file=sys.stderr)
             return False
 
-        run_meta = os.path.join(
-            args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
-        if not os.path.exists(run_meta):
+        if not has_artifacts:
             print(f"  Result: FAILED (exit code 0 but no artifacts produced)",
                   file=sys.stderr)
             return False
