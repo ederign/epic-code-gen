@@ -831,8 +831,10 @@ def main(argv=None):
         all_results[strategy_key] = (epics, results, transitions_log, pr_urls)
 
         if not args.no_report and epics:
+            codegen_runs_dir = os.path.join(args.output_dir, "codegen-runs")
             report_path = generate_status_report(
-                epics, strategy_key, args.report_dir)
+                epics, strategy_key, args.report_dir,
+                codegen_runs_dir=codegen_runs_dir, pr_urls=pr_urls)
             print(f"  Report: {report_path}")
 
     run_log = build_run_log(all_results, start_time)

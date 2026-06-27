@@ -169,7 +169,8 @@ def is_eligible(epic_data, all_epics_by_key):
     return True, "Ready"
 
 
-def generate_status_report(epics, parent_key, output_dir="epic-reports"):
+def generate_status_report(epics, parent_key, output_dir="epic-reports",
+                           codegen_runs_dir=None, pr_urls=None):
     """Generate an HTML status report for the fetched epics.
 
     Returns:
@@ -181,6 +182,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports"):
     path = os.path.join(output_dir, filename)
 
     epics_by_key = {e["epic_id"]: e for e in epics}
+    pr_urls = pr_urls or {}
 
     status_counts = {}
     eligible_count = 0
@@ -213,7 +215,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports"):
     html_content = _render_report_html(
         parent_key, timestamp, rows, status_counts,
         len(epics), eligible_count, blocked_count, done_count,
-        epics,
+        epics, codegen_runs_dir, pr_urls,
     )
 
     with open(path, "w", encoding="utf-8") as f:
@@ -223,10 +225,12 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports"):
 
 
 def _render_report_html(parent_key, timestamp, rows, status_counts,
-                        total, eligible, blocked, done, epics):
+                        total, eligible, blocked, done, epics,
+                        codegen_runs_dir=None, pr_urls=None):
     """Render the full HTML report string."""
     jira_base = os.environ.get("JIRA_SERVER", "https://redhat.atlassian.net")
     jira_base = jira_base.rstrip("/")
+    pr_urls = pr_urls or {}
 
     # Summary cards
     status_cards = ""
@@ -268,7 +272,7 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
 
     mermaid_text = "\n".join(mermaid_lines)
 
-    # Table rows
+    # Table rows with detail panels
     table_rows = ""
     for row in rows:
         deps_chips = " ".join(
@@ -290,9 +294,15 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
                 f' <span class="reason">{_h(row["reason"])}</span>'
             )
 
+        artifacts = _load_epic_artifacts(row["key"], codegen_runs_dir)
+        has_detail = artifacts is not None
+        cursor = ' class="clickable-row"' if has_detail else ""
+        expand = (' <span class="expand-icon">&#9654;</span>'
+                  if has_detail else "")
+
         status_class = _status_badge_class(row["jira_status"])
-        table_rows += f"""<tr>
-  <td><a class="strat-link" href="{jira_base}/browse/{_h(row['key'])}">{_h(row['key'])}</a></td>
+        table_rows += f"""<tr{cursor} onclick="toggleDetail(this)">
+  <td><a class="strat-link" href="{jira_base}/browse/{_h(row['key'])}">{_h(row['key'])}</a>{expand}</td>
   <td>{_h(row['title'])}</td>
   <td><span class="badge {status_class}">{_h(row['jira_status'])}</span></td>
   <td><div class="deps-list">{deps_chips}</div></td>
@@ -300,6 +310,8 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
   <td>{eligible_badge}</td>
 </tr>
 """
+        table_rows += _render_epic_detail(
+            row["key"], artifacts, pr_urls.get(row["key"]))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -355,6 +367,85 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
   .summary-table td {{ padding: 0.4rem 0.75rem; border-bottom: 1px solid #f1f3f5; }}
   .summary-table tr:hover {{ background: #f8f9fa; }}
   .reason {{ font-size: 0.75rem; color: var(--muted); }}
+
+  /* Detail panels */
+  .clickable-row {{ cursor: pointer; }}
+  .clickable-row:hover {{ background: #e8f0fe !important; }}
+  .expand-icon {{ font-size: 0.7rem; color: var(--muted); margin-left: 0.3rem; }}
+  .detail-row td {{ padding: 0 !important; border: none !important; }}
+  .detail-panel {{ background: #f8f9fb; border: 1px solid var(--border);
+                  border-radius: 0 0 8px 8px; padding: 1.25rem; margin: 0 0.5rem 0.75rem; }}
+  .detail-header {{ display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+                   margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); }}
+  .detail-score {{ font-size: 1.5rem; font-weight: 700; }}
+  .detail-meta {{ font-size: 0.85rem; color: var(--muted); }}
+  .pr-link {{ color: var(--accent); font-weight: 600; text-decoration: none;
+             padding: 0.2rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; }}
+  .pr-link:hover {{ background: var(--accent); color: white; }}
+  .muted {{ color: var(--muted); font-style: italic; }}
+
+  /* CSS-only tabs */
+  .tabs {{ position: relative; }}
+  .tabs input[type="radio"] {{ display: none; }}
+  .tabs label {{ display: inline-block; padding: 0.4rem 1rem; cursor: pointer;
+                font-size: 0.85rem; font-weight: 600; color: var(--muted);
+                border-bottom: 2px solid transparent; margin-bottom: -1px; }}
+  .tabs input:checked + label {{ color: var(--accent); border-bottom-color: var(--accent); }}
+  .tab-panel {{ display: none; padding: 1rem 0; }}
+  .tabs input:nth-of-type(1):checked ~ .tab-panel:nth-of-type(1),
+  .tabs input:nth-of-type(2):checked ~ .tab-panel:nth-of-type(2),
+  .tabs input:nth-of-type(3):checked ~ .tab-panel:nth-of-type(3),
+  .tabs input:nth-of-type(4):checked ~ .tab-panel:nth-of-type(4),
+  .tabs input:nth-of-type(5):checked ~ .tab-panel:nth-of-type(5) {{ display: block; }}
+
+  /* Score bars */
+  .score-row {{ display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }}
+  .score-dim {{ width: 90px; font-size: 0.8rem; font-weight: 600; text-transform: capitalize; }}
+  .score-weight {{ width: 35px; font-size: 0.75rem; color: var(--muted); text-align: right; }}
+  .score-track {{ flex: 1; height: 18px; background: #e9ecef; border-radius: 4px; overflow: hidden; }}
+  .score-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s; }}
+  .score-val {{ width: 45px; font-size: 0.8rem; font-weight: 600; text-align: right; }}
+
+  /* Plan tasks */
+  .task-block {{ margin-bottom: 0.5rem; }}
+  .task-block summary {{ cursor: pointer; padding: 0.4rem; border-radius: 4px; }}
+  .task-block summary:hover {{ background: #e9ecef; }}
+  .task-files {{ margin-left: 0.5rem; }}
+  .file-path {{ font-size: 0.75rem; background: #e9ecef; padding: 0.1rem 0.4rem; border-radius: 3px; }}
+  .task-steps {{ padding: 0.5rem 0 0.5rem 1.5rem; }}
+  .step-item {{ display: flex; gap: 0.4rem; font-size: 0.85rem; line-height: 1.8; }}
+  .step-check {{ font-size: 1rem; }}
+
+  /* Diff */
+  .diff-file {{ margin-bottom: 0.5rem; }}
+  .diff-file summary {{ cursor: pointer; padding: 0.3rem 0.5rem; border-radius: 4px;
+                        font-size: 0.85rem; }}
+  .diff-file summary:hover {{ background: #e9ecef; }}
+  .diff-stat-add {{ color: var(--high); font-weight: 600; margin-left: 0.5rem; font-size: 0.8rem; }}
+  .diff-stat-del {{ color: var(--low); font-weight: 600; margin-left: 0.3rem; font-size: 0.8rem; }}
+  .diff-content {{ font-size: 0.78rem; line-height: 1.5; overflow-x: auto;
+                  max-height: 500px; overflow-y: auto; padding: 0.5rem;
+                  background: white; border: 1px solid var(--border); border-radius: 4px; }}
+  .diff-add {{ color: #1a7f37; background: #dafbe1; }}
+  .diff-del {{ color: #cf222e; background: #ffebe9; }}
+  .diff-hunk {{ color: #8250df; background: #f5f0ff; font-weight: 600; }}
+
+  /* Reviews */
+  .review-block {{ margin-bottom: 0.5rem; }}
+  .review-block summary {{ cursor: pointer; padding: 0.4rem; border-radius: 4px; }}
+  .review-block summary:hover {{ background: #e9ecef; }}
+  .review-body {{ padding: 0.5rem 1rem; font-size: 0.85rem; }}
+  .review-body h4,.review-body h5,.review-body h6 {{ margin: 0.75rem 0 0.25rem; }}
+  .review-body p {{ margin-bottom: 0.4rem; }}
+  .review-body li {{ margin-left: 1.5rem; margin-bottom: 0.2rem; }}
+
+  /* Validation */
+  .val-check {{ margin-bottom: 0.5rem; }}
+  .val-check summary {{ cursor: pointer; padding: 0.3rem 0.5rem; border-radius: 4px; }}
+  .val-check summary:hover {{ background: #e9ecef; }}
+  .val-output {{ font-size: 0.75rem; max-height: 300px; overflow: auto;
+                background: #1e1e1e; color: #d4d4d4; padding: 0.75rem;
+                border-radius: 4px; white-space: pre-wrap; word-break: break-all; }}
 </style>
 </head>
 <body>
@@ -396,15 +487,388 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
   mermaid.initialize({{
     startOnLoad: true,
     theme: 'base',
-    themeVariables: {{
-      fontSize: '14px',
-    }},
+    themeVariables: {{ fontSize: '14px' }},
     flowchart: {{ curve: 'basis' }}
   }});
+  function toggleDetail(row) {{
+    if (event.target.closest('a')) return;
+    var detail = row.nextElementSibling;
+    if (detail && detail.classList.contains('detail-row')) {{
+      var icon = row.querySelector('.expand-icon');
+      if (detail.style.display === 'none') {{
+        detail.style.display = '';
+        if (icon) icon.innerHTML = '&#9660;';
+      }} else {{
+        detail.style.display = 'none';
+        if (icon) icon.innerHTML = '&#9654;';
+      }}
+    }}
+  }}
 </script>
 </body>
 </html>
 """
+
+
+def _load_epic_artifacts(epic_id, codegen_runs_dir):
+    """Load codegen artifacts for an epic if they exist.
+
+    Returns dict with available data (all keys optional):
+        metadata, scores, plan_md, reviews (dict), diff, validation, pr_url
+    """
+    if not codegen_runs_dir:
+        return None
+    epic_dir = os.path.join(codegen_runs_dir, epic_id)
+    if not os.path.isdir(epic_dir):
+        return None
+
+    result = {}
+
+    meta_path = os.path.join(epic_dir, "run-metadata.yaml")
+    if os.path.isfile(meta_path):
+        result["metadata"] = _parse_simple_yaml(meta_path)
+
+    plan_path = os.path.join(epic_dir, "codegen-plan.md")
+    if os.path.isfile(plan_path):
+        with open(plan_path, "r", encoding="utf-8") as f:
+            result["plan_md"] = f.read()
+
+    diff_path = os.path.join(epic_dir, "final-diff.patch")
+    if not os.path.isfile(diff_path):
+        diff_path = os.path.join(epic_dir, "v1", "diff.patch")
+    if os.path.isfile(diff_path):
+        with open(diff_path, "r", encoding="utf-8") as f:
+            result["diff"] = f.read()
+
+    versions = sorted(
+        d for d in os.listdir(epic_dir)
+        if d.startswith("v") and os.path.isdir(os.path.join(epic_dir, d)))
+    if versions:
+        latest_v = os.path.join(epic_dir, versions[-1])
+        scores_path = os.path.join(latest_v, "scores.json")
+        if os.path.isfile(scores_path):
+            with open(scores_path, "r", encoding="utf-8") as f:
+                result["scores"] = json.load(f)
+
+        reviews = {}
+        for fname in os.listdir(latest_v):
+            if fname.startswith("review-") and fname.endswith(".md"):
+                dim = fname[7:-3]
+                with open(os.path.join(latest_v, fname),
+                          "r", encoding="utf-8") as f:
+                    reviews[dim] = f.read()
+        if reviews:
+            result["reviews"] = reviews
+
+        val_path = os.path.join(latest_v, "validation.json")
+        if os.path.isfile(val_path):
+            with open(val_path, "r", encoding="utf-8") as f:
+                result["validation"] = json.load(f)
+
+    return result if result else None
+
+
+def _parse_simple_yaml(path):
+    """Parse a simple flat YAML file (no nested structures beyond one level)."""
+    data = {}
+    current_key = None
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("  ") and current_key:
+                sub_key, _, sub_val = line.strip().partition(":")
+                sub_val = sub_val.strip().strip('"')
+                if current_key not in data or not isinstance(
+                        data[current_key], dict):
+                    data[current_key] = {}
+                try:
+                    sub_val = float(sub_val)
+                    if sub_val == int(sub_val):
+                        sub_val = int(sub_val)
+                except (ValueError, TypeError):
+                    pass
+                data[current_key][sub_key] = sub_val
+            else:
+                key, _, val = line.partition(":")
+                val = val.strip().strip('"')
+                if val == "":
+                    current_key = key
+                    continue
+                current_key = None
+                try:
+                    val = float(val)
+                    if val == int(val):
+                        val = int(val)
+                except (ValueError, TypeError):
+                    pass
+                data[key] = val
+    return data
+
+
+def _render_score_bars(scores):
+    """Render score dimension bars as HTML."""
+    if not scores or "dimensions" not in scores:
+        return ""
+    dims = scores["dimensions"]
+    bars = ""
+    for dim in ["architecture", "tests", "lint", "intent"]:
+        d = dims.get(dim, {})
+        score = d.get("score", 0)
+        weight = d.get("weight", 0)
+        pct = score * 10
+        color = "#198754" if score >= 8 else "#fd7e14" if score >= 6 else "#dc3545"
+        bars += (
+            f'<div class="score-row">'
+            f'<span class="score-dim">{_h(dim)}</span>'
+            f'<span class="score-weight">{int(weight*100)}%</span>'
+            f'<div class="score-track">'
+            f'<div class="score-fill" style="width:{pct}%;background:{color}"></div>'
+            f'</div>'
+            f'<span class="score-val">{score:.0f}/10</span>'
+            f'</div>\n'
+        )
+    return bars
+
+
+def _render_plan_html(plan_md):
+    """Parse codegen plan markdown into an HTML task list."""
+    if not plan_md:
+        return '<p class="muted">No plan available</p>'
+    tasks = []
+    current_task = None
+    for line in plan_md.split("\n"):
+        if line.startswith("### Task "):
+            if current_task:
+                tasks.append(current_task)
+            current_task = {"title": line[4:].strip(), "steps": [], "files": []}
+        elif current_task and line.startswith("- [ ] "):
+            current_task["steps"].append(("pending", line[6:].strip()))
+        elif current_task and line.startswith("- [x] "):
+            current_task["steps"].append(("done", line[6:].strip()))
+        elif (current_task and line.startswith("- ")
+              and any(k in line.lower() for k in
+                      ["create:", "modify:", "test:"])):
+            current_task["files"].append(line[2:].strip())
+    if current_task:
+        tasks.append(current_task)
+
+    if not tasks:
+        return '<p class="muted">No tasks found in plan</p>'
+
+    out = ""
+    for t in tasks:
+        files_html = "".join(
+            f'<code class="file-path">{_h(f)}</code> '
+            for f in t["files"])
+        steps_html = ""
+        for status, text in t["steps"]:
+            icon = "&#9745;" if status == "done" else "&#9744;"
+            steps_html += (
+                f'<div class="step-item">'
+                f'<span class="step-check">{icon}</span>'
+                f'<span>{_h(text)}</span></div>\n')
+        out += (
+            f'<details class="task-block">'
+            f'<summary><strong>{_h(t["title"])}</strong>'
+            f'<span class="task-files">{files_html}</span></summary>'
+            f'<div class="task-steps">{steps_html}</div>'
+            f'</details>\n')
+    return out
+
+
+def _render_diff_html(diff_text):
+    """Render unified diff with per-file collapsible sections."""
+    if not diff_text:
+        return '<p class="muted">No diff available</p>'
+    files = []
+    current = None
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git"):
+            if current:
+                files.append(current)
+            parts = line.split(" b/")
+            fname = parts[-1] if len(parts) > 1 else line
+            current = {"name": fname, "lines": []}
+        elif current is not None:
+            current["lines"].append(line)
+    if current:
+        files.append(current)
+
+    if not files:
+        return '<p class="muted">Empty diff</p>'
+
+    out = ""
+    for f in files:
+        adds = sum(1 for l in f["lines"] if l.startswith("+")
+                   and not l.startswith("+++"))
+        dels = sum(1 for l in f["lines"] if l.startswith("-")
+                   and not l.startswith("---"))
+        stat = (f'<span class="diff-stat-add">+{adds}</span>'
+                f'<span class="diff-stat-del">-{dels}</span>')
+        lines_html = ""
+        for line in f["lines"]:
+            cls = ""
+            if line.startswith("+") and not line.startswith("+++"):
+                cls = "diff-add"
+            elif line.startswith("-") and not line.startswith("---"):
+                cls = "diff-del"
+            elif line.startswith("@@"):
+                cls = "diff-hunk"
+            lines_html += f'<div class="{cls}">{_h(line)}</div>'
+        out += (
+            f'<details class="diff-file">'
+            f'<summary><code>{_h(f["name"])}</code> {stat}</summary>'
+            f'<pre class="diff-content">{lines_html}</pre>'
+            f'</details>\n')
+    return out
+
+
+def _render_reviews_html(reviews, scores):
+    """Render review sections with scores."""
+    if not reviews:
+        return '<p class="muted">No reviews available</p>'
+    out = ""
+    for dim in ["architecture", "tests", "lint", "intent"]:
+        content = reviews.get(dim)
+        if not content:
+            continue
+        score = ""
+        if scores and "dimensions" in scores:
+            s = scores["dimensions"].get(dim, {}).get("score", "?")
+            score = f' <span class="badge badge-high">{s}/10</span>'
+
+        body = content.split("---")[-1] if "---" in content else content
+        body_html = ""
+        for line in body.split("\n"):
+            if line.startswith("# "):
+                body_html += f"<h4>{_h(line[2:])}</h4>\n"
+            elif line.startswith("## "):
+                body_html += f"<h5>{_h(line[3:])}</h5>\n"
+            elif line.startswith("### "):
+                body_html += f"<h6>{_h(line[4:])}</h6>\n"
+            elif line.startswith("- "):
+                body_html += f"<li>{_h(line[2:])}</li>\n"
+            elif line.startswith("```"):
+                continue
+            elif line.strip():
+                body_html += f"<p>{_h(line)}</p>\n"
+
+        out += (
+            f'<details class="review-block">'
+            f'<summary><strong>{_h(dim.title())}</strong>{score}</summary>'
+            f'<div class="review-body">{body_html}</div>'
+            f'</details>\n')
+    return out
+
+
+def _render_validation_html(validation):
+    """Render validation check results."""
+    if not validation:
+        return '<p class="muted">No validation data</p>'
+    lang = validation.get("language", "unknown")
+    checks = validation.get("checks", [])
+    out = f'<p><strong>Language:</strong> {_h(lang)}</p>'
+    for check in checks:
+        name = check.get("name", check.get("command", "?"))
+        passed = check.get("passed", False)
+        badge_cls = "badge-high" if passed else "badge-low"
+        label = "PASS" if passed else "FAIL"
+        output = check.get("output", "")
+        if len(output) > 2000:
+            output = output[:2000] + "\n... (truncated)"
+        out += (
+            f'<details class="val-check">'
+            f'<summary><code>{_h(name)}</code> '
+            f'<span class="badge {badge_cls}">{label}</span></summary>'
+            f'<pre class="val-output">{_h(output)}</pre>'
+            f'</details>\n')
+    return out
+
+
+def _render_epic_detail(epic_id, artifacts, pr_url=None):
+    """Render the full detail panel for an epic."""
+    if not artifacts:
+        return (
+            '<tr class="detail-row" style="display:none">'
+            '<td colspan="6"><div class="detail-panel">'
+            '<p class="muted">No codegen run data available</p>'
+            '</div></td></tr>')
+
+    meta = artifacts.get("metadata", {})
+    scores = artifacts.get("scores")
+    status = meta.get("status", "unknown")
+    final_score = meta.get("final_score", "—")
+    lang = meta.get("language", "—")
+    versions = meta.get("versions", "—")
+    started = meta.get("started_at", "")
+    completed = meta.get("completed_at", "")
+    verdict = scores.get("verdict", "—") if scores else "—"
+
+    duration = ""
+    if started and completed:
+        try:
+            from datetime import datetime as _dt
+            t0 = _dt.fromisoformat(started.replace("Z", "+00:00"))
+            t1 = _dt.fromisoformat(completed.replace("Z", "+00:00"))
+            mins = int((t1 - t0).total_seconds() / 60)
+            duration = f"{mins}m"
+        except Exception:
+            pass
+
+    status_cls = ("badge-high" if status == "completed"
+                  else "badge-low" if status in ("failed", "error")
+                  else "badge-medium")
+    verdict_cls = ("badge-high" if verdict == "pass"
+                   else "badge-low" if verdict == "fail"
+                   else "badge-medium")
+
+    header = (
+        f'<div class="detail-header">'
+        f'<span class="badge {status_cls}">{_h(status)}</span> '
+        f'<span class="detail-score">{final_score}/10</span> '
+        f'<span class="badge {verdict_cls}">{_h(verdict)}</span> '
+        f'<span class="detail-meta">{_h(lang)} &bull; '
+        f'v{versions} &bull; {duration}</span>')
+    if pr_url:
+        header += (f' <a href="{_h(pr_url)}" class="pr-link" '
+                   f'target="_blank">View PR</a>')
+    header += '</div>'
+
+    uid = epic_id.replace("-", "_")
+    score_bars = _render_score_bars(scores)
+    plan_html = _render_plan_html(artifacts.get("plan_md"))
+    reviews_html = _render_reviews_html(
+        artifacts.get("reviews"), scores)
+    diff_html = _render_diff_html(artifacts.get("diff"))
+    val_html = _render_validation_html(artifacts.get("validation"))
+
+    tabs = f"""
+<div class="tabs">
+  <input type="radio" name="tab_{uid}" id="tab_{uid}_overview" checked>
+  <label for="tab_{uid}_overview">Overview</label>
+  <input type="radio" name="tab_{uid}" id="tab_{uid}_plan">
+  <label for="tab_{uid}_plan">Plan</label>
+  <input type="radio" name="tab_{uid}" id="tab_{uid}_reviews">
+  <label for="tab_{uid}_reviews">Reviews</label>
+  <input type="radio" name="tab_{uid}" id="tab_{uid}_diff">
+  <label for="tab_{uid}_diff">Diff</label>
+  <input type="radio" name="tab_{uid}" id="tab_{uid}_validation">
+  <label for="tab_{uid}_validation">Validation</label>
+
+  <div class="tab-panel">{score_bars}</div>
+  <div class="tab-panel">{plan_html}</div>
+  <div class="tab-panel">{reviews_html}</div>
+  <div class="tab-panel">{diff_html}</div>
+  <div class="tab-panel">{val_html}</div>
+</div>"""
+
+    return (
+        f'<tr class="detail-row" style="display:none">'
+        f'<td colspan="6"><div class="detail-panel">'
+        f'{header}{tabs}'
+        f'</div></td></tr>')
 
 
 def _mermaid_id(jira_key):
