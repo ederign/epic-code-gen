@@ -298,6 +298,185 @@ def find_eligible(all_epics_by_key, completed_keys, handled_keys):
     return sorted(eligible)
 
 
+TARGET_REPO_DIR = ".target-repo"
+
+
+def setup_target_repo(epic, args):
+    """Pre-setup target repo before Claude: clone, install deps, validate.
+
+    Saves validation and readiness results to pre-setup.json so the
+    epic-codegen skill can skip those steps and jump straight to
+    spec generation.
+
+    Returns:
+        bool: True if setup succeeded, False on failure.
+    """
+    epic_id = epic["epic_id"]
+    target_repo = epic.get("target_repo")
+    if not target_repo:
+        print(f"  {epic_id}: no target_repo set, skipping pre-setup")
+        return False
+
+    print(f"--- Pre-setup for {epic_id} ---")
+    print(f"  Target repo: {target_repo}")
+
+    # 1. Clone + branch
+    clone_cmd = [
+        sys.executable, os.path.join(_SCRIPT_DIR, "clone_target.py"),
+        target_repo, epic_id, "--clean",
+    ]
+    if args.fork_owner:
+        clone_cmd += ["--fork-owner", args.fork_owner,
+                      "--gh-token-var", "EPIC_CODEGEN_GITHUB_TOKEN"]
+
+    try:
+        result = subprocess.run(
+            clone_cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            print(f"  Clone failed: {result.stderr.strip()}", file=sys.stderr)
+            return False
+        print(f"  Cloned to {TARGET_REPO_DIR}")
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"  Clone error: {e}", file=sys.stderr)
+        return False
+
+    # 2. Validate (detect language + commands)
+    validate_cmd = [
+        sys.executable, os.path.join(_SCRIPT_DIR, "validate_target.py"),
+        TARGET_REPO_DIR, "--json",
+    ]
+    try:
+        result = subprocess.run(
+            validate_cmd, capture_output=True, text=True, timeout=120)
+        validation = json.loads(result.stdout) if result.stdout.strip() else {}
+    except Exception:
+        validation = {}
+
+    language = validation.get("language")
+    print(f"  Language: {language or 'unknown'}")
+
+    # 3. Install deps based on language
+    _install_deps(language)
+
+    # 4. Readiness check
+    readiness_cmd = [
+        sys.executable, os.path.join(_SCRIPT_DIR, "repo_readiness.py"),
+        TARGET_REPO_DIR,
+    ]
+    try:
+        result = subprocess.run(
+            readiness_cmd, capture_output=True, text=True, timeout=120)
+        readiness_output = result.stdout.strip()
+    except Exception:
+        readiness_output = ""
+
+    # 5. Save pre-setup.json
+    pre_setup = {
+        "validation": validation,
+        "readiness_output": readiness_output,
+        "language": language,
+        "deps_installed": True,
+    }
+    run_dir = os.path.join(args.output_dir, "codegen-runs", epic_id)
+    os.makedirs(run_dir, exist_ok=True)
+    pre_setup_path = os.path.join(run_dir, "pre-setup.json")
+    with open(pre_setup_path, "w") as f:
+        json.dump(pre_setup, f, indent=2)
+    print(f"  Pre-setup saved: {pre_setup_path}")
+    return True
+
+
+def _install_deps(language):
+    """Install dependencies for the target repo based on detected language."""
+    repo = TARGET_REPO_DIR
+
+    if language in ("typescript", "javascript"):
+        _install_node_deps(repo)
+    elif language == "go":
+        _run_cmd(["go", "mod", "download"], cwd=repo, label="go mod download")
+    elif language == "python":
+        pyproject = os.path.join(repo, "pyproject.toml")
+        requirements = os.path.join(repo, "requirements.txt")
+        if os.path.isfile(pyproject):
+            _run_cmd([sys.executable, "-m", "pip", "install", "-e", "."],
+                     cwd=repo, label="pip install -e .")
+        elif os.path.isfile(requirements):
+            _run_cmd([sys.executable, "-m", "pip", "install", "-r",
+                      "requirements.txt"],
+                     cwd=repo, label="pip install -r requirements.txt")
+
+
+def _install_node_deps(repo):
+    """Install Node.js dependencies, handling version requirements."""
+    pkg_json = os.path.join(repo, "package.json")
+    if not os.path.isfile(pkg_json):
+        return
+
+    required_major = None
+    try:
+        with open(pkg_json) as f:
+            pkg = json.load(f)
+        engines_node = pkg.get("engines", {}).get("node", "")
+        match = re.search(r'>=\s*(\d+)', engines_node)
+        if match:
+            required_major = int(match.group(1))
+    except Exception:
+        pass
+
+    nvmrc = os.path.join(repo, ".nvmrc")
+    if not required_major and os.path.isfile(nvmrc):
+        try:
+            with open(nvmrc) as f:
+                ver = f.read().strip().lstrip("v")
+            required_major = int(ver.split(".")[0])
+        except Exception:
+            pass
+
+    nvm_prefix = ""
+    if required_major:
+        current = _get_node_major()
+        if current and current < required_major:
+            nvm_sh = os.path.expanduser("~/.nvm/nvm.sh")
+            if os.path.isfile(nvm_sh):
+                nvm_prefix = (
+                    f'source "{nvm_sh}" && nvm install {required_major} && '
+                )
+                print(f"  Node {current} < {required_major}, "
+                      f"using nvm to install {required_major}")
+
+    cmd = f"{nvm_prefix}npm install"
+    _run_cmd(["bash", "-c", cmd], cwd=repo, label="npm install")
+
+
+def _get_node_major():
+    """Return the major version of the current node, or None."""
+    try:
+        result = subprocess.run(
+            ["node", "--version"], capture_output=True, text=True, timeout=10)
+        ver = result.stdout.strip().lstrip("v")
+        return int(ver.split(".")[0])
+    except Exception:
+        return None
+
+
+def _run_cmd(cmd, cwd=None, label=None, timeout=600):
+    """Run a command, log success/failure. Returns True on success."""
+    label = label or " ".join(cmd)
+    try:
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0:
+            print(f"  {label}: OK")
+            return True
+        else:
+            print(f"  {label}: FAILED (exit {result.returncode})",
+                  file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"  {label}: ERROR ({e})", file=sys.stderr)
+        return False
+
+
 def invoke_codegen(epic_id, args):
     """Shell out to Claude for codegen. Returns True on success."""
     skill_args = f"/epic-codegen {epic_id}"
@@ -442,6 +621,15 @@ def process_strategy(strategy_key, server, user, token, args):
 
         print(f"  {epic_id}: ELIGIBLE — starting codegen")
         epic_transitions = []
+
+        if not args.dry_run:
+            setup_ok = setup_target_repo(
+                all_epics_by_key[epic_id], args)
+            if not setup_ok:
+                results[FAILED].append(
+                    (epic_id, "target repo setup failed"))
+                handled_keys.add(epic_id)
+                continue
 
         ok, _ = transition_issue(
             server, user, token, epic_id, "In Progress")

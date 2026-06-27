@@ -28,6 +28,7 @@ from run_pipeline import (
     resolve_target_repo,
     transition_issue,
     invoke_codegen,
+    setup_target_repo,
     parse_args,
     print_summary,
     process_strategy,
@@ -145,12 +146,13 @@ class TestFindEligible:
 class TestProcessStrategy:
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_linear_chain_processes_first_only(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         """A→B chain: only A is eligible (B blocked by A)."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -174,12 +176,13 @@ class TestProcessStrategy:
         mock_invoke.assert_called_once_with("A-1", args)
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_deps_all_eligible(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         """Two independent epics: both eligible."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -199,12 +202,13 @@ class TestProcessStrategy:
         assert len(results[BLOCKED]) == 0
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=False)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_failure_blocks_dependents(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         """A fails → B stays blocked."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -280,12 +284,13 @@ class TestProcessStrategy:
         assert pr_urls == {}
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen")
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_mixed_results(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         """One done, one eligible succeeds, one eligible fails, one blocked."""
         issues = [{"key": f"A-{i}", "fields": {}} for i in range(1, 5)]
         mock_fetch.return_value = issues
@@ -404,6 +409,62 @@ class TestInvokeCodegen:
         args = _make_args()
         result = invoke_codegen("A-1", args)
         assert result is False
+
+
+# ─── TestSetupTargetRepo ─────────────────────────────────────────────────────
+
+class TestSetupTargetRepo:
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_clones_and_validates(self, mock_run, tmp_path):
+        mock_run.return_value = mock.MagicMock(
+            returncode=0,
+            stdout='{"language": "typescript", "commands": {}}',
+            stderr="",
+        )
+        epic = _epic("A-1")
+        epic["target_repo"] = "https://github.com/org/repo.git"
+        args = _make_args(output_dir=str(tmp_path))
+        result = setup_target_repo(epic, args)
+
+        assert result is True
+        pre_setup = tmp_path / "codegen-runs" / "A-1" / "pre-setup.json"
+        assert pre_setup.exists()
+        data = json.loads(pre_setup.read_text())
+        assert data["language"] == "typescript"
+        assert data["deps_installed"] is True
+
+    def test_no_target_repo_returns_false(self):
+        epic = _epic("A-1")
+        epic["target_repo"] = ""
+        args = _make_args()
+        result = setup_target_repo(epic, args)
+        assert result is False
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_clone_failure_returns_false(self, mock_run):
+        mock_run.return_value = mock.MagicMock(
+            returncode=128, stdout="", stderr="clone failed")
+        epic = _epic("A-1")
+        epic["target_repo"] = "https://github.com/org/repo.git"
+        args = _make_args()
+        result = setup_target_repo(epic, args)
+        assert result is False
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_passes_fork_owner(self, mock_run, tmp_path):
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout="{}", stderr="")
+        epic = _epic("A-1")
+        epic["target_repo"] = "https://github.com/org/repo.git"
+        args = _make_args(fork_owner="dora-the-ai-coder",
+                          output_dir=str(tmp_path))
+        setup_target_repo(epic, args)
+
+        clone_call = mock_run.call_args_list[0]
+        cmd = clone_call[0][0]
+        assert "--fork-owner" in cmd
+        assert "dora-the-ai-coder" in cmd
 
 
 # ─── TestCleanArtifacts ───────────────────────────────────────────────────────
@@ -768,12 +829,13 @@ class TestTransitionIssue:
 class TestProcessStrategyTransitions:
 
     @mock.patch("run_pipeline.transition_issue")
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_to_in_progress_before_codegen(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -788,12 +850,13 @@ class TestProcessStrategyTransitions:
         assert calls[0] == mock.call("s", "u", "t", "A-1", "In Progress")
 
     @mock.patch("run_pipeline.transition_issue")
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_to_in_review_after_success(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -809,12 +872,13 @@ class TestProcessStrategyTransitions:
         assert calls[1] == mock.call("s", "u", "t", "A-1", "Review")
 
     @mock.patch("run_pipeline.transition_issue")
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=False)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_failure_rolls_back_to_original_status(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -848,12 +912,13 @@ class TestProcessStrategyTransitions:
         mock_trans.assert_not_called()
 
     @mock.patch("run_pipeline.transition_issue")
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_captured_in_log(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -991,12 +1056,13 @@ class TestProcessStrategyPrLinking:
     @mock.patch("run_pipeline.read_pr_url",
                 return_value="https://github.com/org/repo/pull/42")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_links_pr_after_successful_codegen(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
             mock_trans, mock_read_pr, mock_link):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -1016,12 +1082,13 @@ class TestProcessStrategyPrLinking:
     @mock.patch("run_pipeline.link_pr_to_jira")
     @mock.patch("run_pipeline.read_pr_url", return_value=None)
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_link_when_no_pr_url(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
             mock_trans, mock_read_pr, mock_link):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -1130,12 +1197,13 @@ class TestLoadPrUrlsFromLogs:
 class TestProcessableStatuses:
 
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_new_epic_is_eligible(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1213,7 +1281,8 @@ class TestReconciliation:
             _epic("A-2", jira_status="New", dependencies=["A-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
-            with mock.patch("run_pipeline.invoke_codegen", return_value=True):
+            with mock.patch("run_pipeline.invoke_codegen", return_value=True), \
+                 mock.patch("run_pipeline.setup_target_repo", return_value=True):
                 _, results, transitions_log, _ = process_strategy(
                     "RHAISTRAT-1", "s", "u", "t", args)
 

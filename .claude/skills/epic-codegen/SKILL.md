@@ -92,6 +92,9 @@ python3 scripts/frontmatter.py set artifacts/epic-tasks/${EPIC_ID}.md status=InP
 
 ### Step 3: Clone Target Repo
 
+If `.target-repo/` already exists and has branch `epic/${EPIC_ID}`, skip
+cloning — the pipeline orchestrator already set it up. Otherwise:
+
 ```bash
 python3 scripts/clone_target.py <target_repo_url> ${EPIC_ID} --clean [--fork-owner USER] [--gh-token-var EPIC_CODEGEN_GITHUB_TOKEN]
 ```
@@ -102,6 +105,12 @@ creates the fork if it doesn't exist, and configures the fork remote with
 push credentials embedded in the URL.
 
 ### Step 4: Validate Target Repo
+
+If `artifacts/codegen-runs/${EPIC_ID}/pre-setup.json` exists, read it —
+the pipeline already ran readiness, validation, and dependency installation.
+Extract language and validation commands from that file and skip to Step 5.
+
+Otherwise, run validation manually:
 
 ```bash
 python3 scripts/repo_readiness.py .target-repo/
