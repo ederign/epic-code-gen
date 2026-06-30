@@ -895,12 +895,25 @@ def save_epic_state(data_repo, strategy_key, epic_id, state):
 
 def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
                                          output_dir):
-    """Copy codegen artifacts (specs, plans, diffs, reviews) to the data repo."""
+    """Copy all artifacts (tasks, strategy, specs, diffs, reviews) to the data repo."""
+    dest = os.path.join(data_repo, strategy_key, epic_id)
+    os.makedirs(dest, exist_ok=True)
+
+    # Epic-task file (task breakdown with ACs and dependencies)
+    task_src = os.path.join(output_dir, "epic-tasks", f"{epic_id}.md")
+    if os.path.isfile(task_src):
+        shutil.copy2(task_src, os.path.join(dest, "epic-task.md"))
+
+    # Strategy doc (business context from Jira)
+    strat_dest = os.path.join(data_repo, strategy_key)
+    strat_src = os.path.join(output_dir, "strategies", f"{strategy_key}.md")
+    if os.path.isfile(strat_src):
+        shutil.copy2(strat_src, os.path.join(strat_dest, "strategy.md"))
+
+    # Codegen run artifacts
     src = os.path.join(output_dir, "codegen-runs", epic_id)
     if not os.path.isdir(src):
         return
-    dest = os.path.join(data_repo, strategy_key, epic_id)
-    os.makedirs(dest, exist_ok=True)
 
     for name in ("codegen-spec.md", "codegen-plan.md",
                  "final-diff.patch", "best-diff.patch"):
