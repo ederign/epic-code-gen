@@ -1,0 +1,239 @@
+"""Tests for CI-mode state machine in run_pipeline.py."""
+
+import json
+import os
+import sys
+from types import SimpleNamespace
+
+import pytest
+import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+from run_pipeline import (
+    BLOCKED,
+    FAILED,
+    PROCESSED,
+    SKIPPED,
+    ci_process_epic,
+    load_epic_state,
+    save_epic_state,
+)
+
+
+def _epic(epic_id, strategy_key="RHAISTRAT-1", deps=None, **kwargs):
+    data = {
+        "epic_id": epic_id,
+        "strategy_key": strategy_key,
+        "title": f"Epic {epic_id}",
+        "target_repo": "mlflow/mlflow",
+        "target_branch": "main",
+        "jira_status": "New",
+        "dependencies": deps,
+        "blocks": None,
+        "body": "",
+    }
+    data.update(kwargs)
+    return data
+
+
+def _args(data_repo, dry_run=False):
+    return SimpleNamespace(
+        data_repo=str(data_repo),
+        dry_run=dry_run,
+        output_dir="artifacts",
+        fork_owner="dora-the-ai-coder",
+        max_iterations=None,
+        run_script=None,
+        timeout=60,
+        log_dir="pipeline-runs",
+    )
+
+
+class TestLoadSaveState:
+
+    def test_save_and_load(self, tmp_path):
+        state = {
+            "status": "Ready",
+            "target_repo": "mlflow/mlflow",
+            "current_version": 1,
+        }
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", state)
+        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+
+        assert loaded["status"] == "Ready"
+        assert loaded["epic_id"] == "E001"
+        assert loaded["strategy_key"] == "RHAISTRAT-1"
+        assert loaded["current_version"] == 1
+
+    def test_load_nonexistent(self, tmp_path):
+        result = load_epic_state(tmp_path, "RHAISTRAT-1", "MISSING")
+        assert result is None
+
+    def test_save_creates_directories(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        {"status": "Pending"})
+        assert (tmp_path / "RHAISTRAT-1" / "E001"
+                / "run-metadata.yaml").exists()
+
+
+class TestCIStateMachine:
+
+    def test_new_epic_no_deps_becomes_ready(self, tmp_path):
+        epic = _epic("E001")
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, None, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert from_s == "Pending"
+        assert to_s == "Ready"
+
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["status"] == "Ready"
+
+    def test_new_epic_with_unmet_deps_becomes_blocked(self, tmp_path):
+        epic = _epic("E002", deps=["E001"])
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, None, args, "srv", "usr", "tok")
+
+        assert action == BLOCKED
+        assert to_s == "Blocked"
+        assert "E001" in detail
+
+    def test_new_epic_with_met_deps_becomes_ready(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        {"status": "Done"})
+
+        epic = _epic("E002", deps=["E001"])
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, None, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "Ready"
+
+    def test_done_epic_is_skipped(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "Done", "current_version": 2}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert "Terminal" in detail
+
+    def test_failed_epic_is_skipped(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "Failed", "failure_reason": "codegen failed"}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+
+    def test_blocked_becomes_ready_when_deps_done(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        {"status": "Done"})
+
+        epic = _epic("E002", deps=["E001"])
+        state = {"status": "Blocked", "blocked_by": ["E001"]}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert from_s == "Blocked"
+        assert to_s == "Ready"
+        assert "resolved" in detail.lower()
+
+    def test_blocked_stays_blocked_with_unmet_deps(self, tmp_path):
+        epic = _epic("E002", deps=["E001"])
+        state = {"status": "Blocked", "blocked_by": ["E001"]}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == BLOCKED
+        assert to_s == "Blocked"
+
+    def test_review_pending_fails_when_exhausted(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "ReviewPending", "current_version": 3,
+                 "max_iterations": 3}
+
+        scores_dir = os.path.join("artifacts", "codegen-runs", "E001", "v3")
+        os.makedirs(scores_dir, exist_ok=True)
+        with open(os.path.join(scores_dir, "scores.json"), "w") as f:
+            json.dump({"architecture": 5, "tests": 4, "lint": 6,
+                       "intent": 5, "weighted_avg": 5.0}, f)
+
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == FAILED
+        assert to_s == "Failed"
+        assert "Exhausted" in detail
+
+        os.remove(os.path.join(scores_dir, "scores.json"))
+        os.removedirs(scores_dir)
+
+    def test_review_pending_skips_without_scores(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "ReviewPending", "current_version": 1}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert "Waiting" in detail
+
+    def test_ready_dry_run_doesnt_invoke(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "Ready", "current_version": 0}
+        args = _args(tmp_path, dry_run=True)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert "dry-run" in detail
+
+    def test_pr_created_skips_without_token(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
+
+        epic = _epic("E001")
+        state = {"status": "PRCreated",
+                 "pr_url": "https://github.com/org/repo/pull/1"}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+
+    def test_pr_changes_requested_skips_without_token(self, tmp_path,
+                                                       monkeypatch):
+        monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
+
+        epic = _epic("E001")
+        state = {"status": "PRChangesRequested",
+                 "pr_url": "https://github.com/org/repo/pull/1",
+                 "current_version": 1, "max_iterations": 3}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
