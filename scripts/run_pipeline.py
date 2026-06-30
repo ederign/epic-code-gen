@@ -15,6 +15,9 @@ Usage:
     # CI mode (use run-claude.sh wrapper)
     python3 scripts/run_pipeline.py RHAISTRAT-1699 --run-script ci-scripts/run-claude.sh
 
+    # CI mode with data repo (state machine, convergence across runs)
+    python3 scripts/run_pipeline.py RHAISTRAT-1699 --ci --data-repo /path/to/data-repo
+
     # With codegen options
     python3 scripts/run_pipeline.py RHAISTRAT-1699 --max-iterations 5 --fork-owner dora-the-ai-coder
 """
@@ -48,12 +51,23 @@ from jira_utils import (
     require_env,
 )
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 PROCESSED = "processed"
 SKIPPED = "skipped"
 BLOCKED = "blocked"
 FAILED = "failed"
 
 PROCESSABLE_STATUSES = {"New", "To Do", "Open"}
+
+CI_STATES = {
+    "Pending", "Ready", "Generating", "ReviewPending",
+    "PRCreated", "PRChangesRequested", "Done", "Blocked", "Failed",
+}
+CI_TERMINAL_STATES = {"Done", "Failed"}
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
@@ -819,6 +833,464 @@ def print_summary(all_results):
     print()
 
 
+# ─── CI Mode: State Machine ─────────────────────────────────────────────────
+
+
+def load_epic_state(data_repo, strategy_key, epic_id):
+    """Read epic state from data repo's run-metadata.yaml.
+
+    Returns:
+        dict or None: parsed metadata, or None if no state file exists.
+    """
+    meta_path = os.path.join(data_repo, strategy_key, epic_id,
+                             "run-metadata.yaml")
+    if not os.path.isfile(meta_path):
+        return None
+    if yaml:
+        with open(meta_path) as f:
+            return yaml.safe_load(f) or {}
+    return _read_metadata_simple(meta_path)
+
+
+def _read_metadata_simple(path):
+    """Fallback YAML reader for simple key: value files."""
+    data = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ": " in line:
+                key, val = line.split(": ", 1)
+                val = val.strip().strip("'\"")
+                if val.isdigit():
+                    val = int(val)
+                elif val in ("true", "True"):
+                    val = True
+                elif val in ("false", "False"):
+                    val = False
+                elif val in ("null", "None", "~"):
+                    val = None
+                data[key.strip()] = val
+    return data
+
+
+def save_epic_state(data_repo, strategy_key, epic_id, state):
+    """Write epic state to data repo's run-metadata.yaml."""
+    epic_dir = os.path.join(data_repo, strategy_key, epic_id)
+    os.makedirs(epic_dir, exist_ok=True)
+    meta_path = os.path.join(epic_dir, "run-metadata.yaml")
+
+    state["epic_id"] = epic_id
+    state["strategy_key"] = strategy_key
+
+    if yaml:
+        with open(meta_path, "w") as f:
+            yaml.dump(state, f, default_flow_style=False, sort_keys=False)
+    else:
+        with open(meta_path, "w") as f:
+            for k, v in state.items():
+                f.write(f"{k}: {v}\n")
+
+
+def ci_process_epic(epic, state, args, server, user, token):
+    """State machine: decide action based on epic's current CI state.
+
+    Args:
+        epic: epic data dict from Jira
+        state: current state from data repo (or None for new epics)
+        args: parsed CLI args
+        server, user, token: Jira credentials
+
+    Returns:
+        tuple: (action, from_state, to_state, detail)
+    """
+    epic_id = epic["epic_id"]
+
+    if state is None:
+        state = _init_epic_state(epic)
+        save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+
+    current = state.get("status", "Pending")
+
+    if current in CI_TERMINAL_STATES:
+        return SKIPPED, current, current, f"Terminal state: {current}"
+
+    if current == "Pending":
+        return _ci_handle_pending(epic, state, args, server, user, token)
+    elif current == "Ready":
+        return _ci_handle_ready(epic, state, args, server, user, token)
+    elif current == "Generating":
+        return _ci_handle_ready(epic, state, args, server, user, token)
+    elif current == "ReviewPending":
+        return _ci_handle_review_pending(epic, state, args,
+                                         server, user, token)
+    elif current == "PRCreated":
+        return _ci_handle_pr_created(epic, state, args, server, user, token)
+    elif current == "PRChangesRequested":
+        return _ci_handle_pr_changes(epic, state, args, server, user, token)
+    elif current == "Blocked":
+        return _ci_handle_blocked(epic, state, args, server, user, token)
+    else:
+        return SKIPPED, current, current, f"Unknown state: {current}"
+
+
+def _init_epic_state(epic):
+    """Create initial state for a new epic."""
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "epic_id": epic["epic_id"],
+        "strategy_key": epic.get("strategy_key", ""),
+        "status": "Pending",
+        "target_repo": epic.get("target_repo", ""),
+        "target_branch": "main",
+        "current_version": 0,
+        "max_iterations": 3,
+        "timestamps": {"created": now},
+    }
+
+
+def _ci_handle_pending(epic, state, args, server, user, token):
+    """Classify: check eligibility, move to Ready or Blocked."""
+    epic_id = epic["epic_id"]
+    deps = epic.get("dependencies") or []
+
+    if deps:
+        unmet = []
+        for dep in deps:
+            dep_state = load_epic_state(
+                args.data_repo, epic["strategy_key"], dep)
+            if not dep_state or dep_state.get("status") != "Done":
+                unmet.append(dep)
+        if unmet:
+            state["status"] = "Blocked"
+            state["blocked_by"] = unmet
+            save_epic_state(
+                args.data_repo, epic["strategy_key"], epic_id, state)
+            return BLOCKED, "Pending", "Blocked", \
+                f"Blocked by {', '.join(unmet)}"
+
+    state["status"] = "Ready"
+    save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+    return PROCESSED, "Pending", "Ready", "Classified as ready"
+
+
+def _ci_handle_ready(epic, state, args, server, user, token):
+    """Run codegen for this epic."""
+    epic_id = epic["epic_id"]
+
+    if args.dry_run:
+        return PROCESSED, "Ready", "Ready", "dry-run"
+
+    setup_ok = setup_target_repo(epic, args)
+    if not setup_ok:
+        state["status"] = "Failed"
+        state["failure_reason"] = "target repo setup failed"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "Ready", "Failed", "target repo setup failed"
+
+    transition_issue(server, user, token, epic_id, "In Progress")
+
+    state["status"] = "Generating"
+    state["current_version"] = state.get("current_version", 0) + 1
+    state.setdefault("timestamps", {})["last_run"] = \
+        datetime.now(timezone.utc).isoformat()
+    save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+
+    success = invoke_codegen(epic_id, args)
+    if success:
+        state["status"] = "ReviewPending"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return PROCESSED, "Ready", "ReviewPending", \
+            f"Codegen v{state['current_version']} completed"
+    else:
+        state["status"] = "Failed"
+        state["failure_reason"] = "codegen failed"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "Ready", "Failed", "codegen failed"
+
+
+def _ci_handle_review_pending(epic, state, args, server, user, token):
+    """Score the review and decide: create PR or iterate."""
+    epic_id = epic["epic_id"]
+    version = state.get("current_version", 1)
+
+    scores_path = os.path.join(
+        args.output_dir, "codegen-runs", epic_id,
+        f"v{version}", "scores.json")
+
+    if not os.path.isfile(scores_path):
+        return SKIPPED, "ReviewPending", "ReviewPending", \
+            "Waiting for review scores"
+
+    with open(scores_path) as f:
+        scores = json.load(f)
+
+    state["scores"] = scores
+    avg = scores.get("weighted_avg", 0)
+    dims_ok = all(scores.get(d, 0) >= 6.0
+                  for d in ("architecture", "tests", "lint", "intent"))
+
+    if avg >= 8.0 and dims_ok:
+        pr_url = _create_pr_for_epic(epic, state, args)
+        if pr_url:
+            state["status"] = "PRCreated"
+            state["pr_url"] = pr_url
+            state["pr_state"] = "open"
+            state.setdefault("timestamps", {})["pr_created"] = \
+                datetime.now(timezone.utc).isoformat()
+            save_epic_state(
+                args.data_repo, epic["strategy_key"], epic_id, state)
+
+            transition_issue(server, user, token, epic_id, "Review")
+            link_pr_to_jira(server, user, token, epic_id, pr_url)
+            return PROCESSED, "ReviewPending", "PRCreated", \
+                f"PR created (avg={avg:.1f})"
+
+        state["status"] = "Failed"
+        state["failure_reason"] = "PR creation failed"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "ReviewPending", "Failed", "PR creation failed"
+
+    max_iter = state.get("max_iterations", 3)
+    if version >= max_iter:
+        state["status"] = "Failed"
+        state["failure_reason"] = \
+            f"Exhausted {max_iter} iterations (avg={avg:.1f})"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "ReviewPending", "Failed", \
+            f"Exhausted {max_iter} iterations"
+
+    state["status"] = "Ready"
+    save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+    return PROCESSED, "ReviewPending", "Ready", \
+        f"Score too low (avg={avg:.1f}), will retry v{version + 1}"
+
+
+def _ci_handle_pr_created(epic, state, args, server, user, token):
+    """Check PR status on GitHub."""
+    epic_id = epic["epic_id"]
+    pr_url = state.get("pr_url")
+    if not pr_url:
+        return SKIPPED, "PRCreated", "PRCreated", "No PR URL"
+
+    try:
+        from pr_lifecycle import get_pr_status, derive_pr_state
+        gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+        if not gh_token:
+            return SKIPPED, "PRCreated", "PRCreated", "No GitHub token"
+
+        status = get_pr_status(pr_url, gh_token)
+        new_state = derive_pr_state(status)
+
+        if new_state == state.get("status"):
+            return SKIPPED, "PRCreated", "PRCreated", "No status change"
+
+        state["status"] = new_state
+        state["pr_state"] = "merged" if status["merged"] else status["state"]
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+
+        if new_state == "Done":
+            transition_issue(server, user, token, epic_id, "Done")
+            return PROCESSED, "PRCreated", "Done", "PR merged"
+        elif new_state == "PRChangesRequested":
+            return PROCESSED, "PRCreated", "PRChangesRequested", \
+                "Review changes requested"
+        elif new_state == "Ready":
+            return PROCESSED, "PRCreated", "Ready", "PR closed, will retry"
+        return SKIPPED, "PRCreated", new_state, f"State → {new_state}"
+
+    except ImportError:
+        merged = check_pr_merged(pr_url)
+        if merged:
+            state["status"] = "Done"
+            state["pr_state"] = "merged"
+            save_epic_state(
+                args.data_repo, epic["strategy_key"], epic_id, state)
+            transition_issue(server, user, token, epic_id, "Done")
+            return PROCESSED, "PRCreated", "Done", "PR merged (gh fallback)"
+        return SKIPPED, "PRCreated", "PRCreated", "PR still open"
+
+
+def _ci_handle_pr_changes(epic, state, args, server, user, token):
+    """Pull review comments and prepare the next iteration."""
+    epic_id = epic["epic_id"]
+    pr_url = state.get("pr_url")
+    if not pr_url:
+        return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
+            "No PR URL"
+
+    max_iter = state.get("max_iterations", 3)
+    version = state.get("current_version", 1)
+    if version >= max_iter:
+        state["status"] = "Failed"
+        state["failure_reason"] = \
+            f"Exhausted {max_iter} iterations with PR feedback"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "PRChangesRequested", "Failed", \
+            f"Exhausted {max_iter} iterations"
+
+    try:
+        from pr_lifecycle import get_pr_reviews, format_review_feedback
+        gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+        if not gh_token:
+            return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
+                "No GitHub token for review fetch"
+
+        reviews_data = get_pr_reviews(pr_url, gh_token)
+        feedback = format_review_feedback(reviews_data)
+
+        next_version = version + 1
+        revision_dir = os.path.join(
+            args.output_dir, "codegen-runs", epic_id, f"v{next_version}")
+        os.makedirs(revision_dir, exist_ok=True)
+        with open(os.path.join(revision_dir, "revision-notes.md"), "w") as f:
+            f.write(feedback)
+
+        state["status"] = "Ready"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return PROCESSED, "PRChangesRequested", "Ready", \
+            f"Review feedback saved, will retry v{next_version}"
+
+    except ImportError:
+        return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
+            "pr_lifecycle not available"
+
+
+def _ci_handle_blocked(epic, state, args, server, user, token):
+    """Check if blocking dependencies are now done."""
+    epic_id = epic["epic_id"]
+    blocked_by = state.get("blocked_by") or epic.get("dependencies") or []
+
+    still_blocked = []
+    for dep in blocked_by:
+        dep_state = load_epic_state(
+            args.data_repo, epic["strategy_key"], dep)
+        if not dep_state or dep_state.get("status") != "Done":
+            still_blocked.append(dep)
+
+    if still_blocked:
+        state["blocked_by"] = still_blocked
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return BLOCKED, "Blocked", "Blocked", \
+            f"Still blocked by {', '.join(still_blocked)}"
+
+    state["status"] = "Ready"
+    if "blocked_by" in state:
+        del state["blocked_by"]
+    save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+    return PROCESSED, "Blocked", "Ready", "Dependencies resolved"
+
+
+def _create_pr_for_epic(epic, state, args):
+    """Create a PR from fork to upstream for the epic's changes.
+
+    Returns:
+        str or None: PR URL, or None on failure.
+    """
+    epic_id = epic["epic_id"]
+    target_repo = epic.get("target_repo", "")
+    if not target_repo:
+        print(f"  {epic_id}: no target_repo, skipping PR creation",
+              file=sys.stderr)
+        return None
+
+    pr_url = read_pr_url(epic_id, args.output_dir)
+    if pr_url:
+        return pr_url
+
+    try:
+        from create_pr import create_pr
+        from push_to_fork import push_to_fork
+
+        branch = f"epic/{epic_id}"
+        push_ok = push_to_fork(TARGET_REPO_DIR, branch)
+        if not push_ok:
+            print(f"  {epic_id}: push to fork failed", file=sys.stderr)
+            return None
+
+        slug = target_repo.split("/")
+        if len(slug) != 2:
+            return None
+
+        pr = create_pr(
+            upstream=target_repo,
+            fork_owner=args.fork_owner,
+            branch=branch,
+            title=f"{epic_id}: {epic.get('title', 'Code generation')}",
+            body=f"Generated by epic-code-gen pipeline.\n\n"
+                 f"Strategy: {epic.get('strategy_key', '')}\n"
+                 f"Epic: {epic_id}",
+        )
+        return pr.get("html_url")
+    except (ImportError, Exception) as e:
+        print(f"  {epic_id}: PR creation error: {e}", file=sys.stderr)
+        return None
+
+
+def process_strategy_ci(strategy_key, server, user, token, args):
+    """CI-mode: process one strategy with state machine convergence.
+
+    Returns:
+        tuple: (epics_list, results_dict, actions_log)
+    """
+    print(f"\n{'='*60}")
+    print(f"Strategy: {strategy_key} (CI mode)")
+    print(f"{'='*60}")
+
+    print(f"Fetching children of {strategy_key}...")
+    issues = fetch_children(server, user, token, strategy_key)
+    if not issues:
+        print(f"  No child work items found for {strategy_key}")
+        return [], {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}, []
+
+    print(f"  Found {len(issues)} child work items")
+
+    dag = build_dependency_dag(issues)
+    epics = [issue_to_epic_data(issue, strategy_key, dag) for issue in issues]
+
+    mapping = load_repo_mapping()
+    for epic in epics:
+        repo = resolve_target_repo(epic, mapping)
+        if repo:
+            epic["target_repo"] = repo
+
+    results = {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}
+    actions_log = []
+
+    for epic in epics:
+        epic_id = epic["epic_id"]
+        state = load_epic_state(args.data_repo, strategy_key, epic_id)
+
+        action, from_state, to_state, detail = ci_process_epic(
+            epic, state, args, server, user, token)
+
+        results[action].append((epic_id, detail))
+        print(f"  {epic_id}: {from_state} → {to_state} ({detail})")
+
+        if from_state != to_state:
+            actions_log.append({
+                "epic": epic_id,
+                "from": from_state,
+                "to": to_state,
+                "version": (state or {}).get("current_version"),
+            })
+
+    return epics, results, actions_log
+
+
+# ─── CLI ─────────────────────────────────────────────────────────────────────
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Orchestrate codegen pipeline for strategy epics")
@@ -831,7 +1303,8 @@ def parse_args(argv=None):
     parser.add_argument("--max-iterations", type=int, default=None,
                         help="Pass --max-iterations to epic-codegen")
     parser.add_argument("--fork-owner", default="dora-the-ai-coder",
-                        help="Pass --fork-owner to epic-codegen (default: dora-the-ai-coder)")
+                        help="Pass --fork-owner to epic-codegen "
+                             "(default: dora-the-ai-coder)")
     parser.add_argument("--no-clean", action="store_true",
                         help="Don't wipe artifacts before fetch")
     parser.add_argument("--output-dir", default="artifacts",
@@ -846,6 +1319,10 @@ def parse_args(argv=None):
                         help="Skip fetching strategy from Jira")
     parser.add_argument("--no-report", action="store_true",
                         help="Skip generating HTML status report")
+    parser.add_argument("--ci", action="store_true",
+                        help="CI mode: use data repo for state persistence")
+    parser.add_argument("--data-repo",
+                        help="Path to cloned data repo (required with --ci)")
     return parser.parse_args(argv)
 
 
@@ -858,27 +1335,41 @@ def main(argv=None):
             print(f"Error: invalid key format: {key}", file=sys.stderr)
             sys.exit(1)
 
+    if args.ci and not args.data_repo:
+        print("Error: --data-repo is required with --ci", file=sys.stderr)
+        sys.exit(1)
+
     server, user, token = require_env()
     if not all([server, user, token]):
         print("Error: JIRA_SERVER, JIRA_USER, JIRA_TOKEN must be set",
               file=sys.stderr)
         sys.exit(1)
 
-    if not args.no_clean:
+    if not args.no_clean and not args.ci:
         clean_artifacts(args.output_dir)
 
     all_results = {}
-    for strategy_key in args.keys:
-        epics, results, transitions_log, pr_urls = process_strategy(
-            strategy_key, server, user, token, args)
-        all_results[strategy_key] = (epics, results, transitions_log, pr_urls)
+    all_actions = {}
 
-        if not args.no_report and epics:
-            codegen_runs_dir = os.path.join(args.output_dir, "codegen-runs")
-            report_path = generate_status_report(
-                epics, strategy_key, args.report_dir,
-                codegen_runs_dir=codegen_runs_dir, pr_urls=pr_urls)
-            print(f"  Report: {report_path}")
+    for strategy_key in args.keys:
+        if args.ci:
+            epics, results, actions_log = process_strategy_ci(
+                strategy_key, server, user, token, args)
+            all_results[strategy_key] = (epics, results, {}, {})
+            all_actions[strategy_key] = actions_log
+        else:
+            epics, results, transitions_log, pr_urls = process_strategy(
+                strategy_key, server, user, token, args)
+            all_results[strategy_key] = (
+                epics, results, transitions_log, pr_urls)
+
+            if not args.no_report and epics:
+                codegen_runs_dir = os.path.join(
+                    args.output_dir, "codegen-runs")
+                report_path = generate_status_report(
+                    epics, strategy_key, args.report_dir,
+                    codegen_runs_dir=codegen_runs_dir, pr_urls=pr_urls)
+                print(f"  Report: {report_path}")
 
     run_log = build_run_log(all_results, start_time)
     log_path = write_run_log(run_log, args.log_dir)
