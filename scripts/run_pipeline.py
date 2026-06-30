@@ -1030,8 +1030,9 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
         scores = json.load(f)
 
     state["scores"] = scores
-    avg = scores.get("weighted_avg", 0)
-    dims_ok = all(scores.get(d, 0) >= 6.0
+    avg = scores.get("weighted_average", 0)
+    dims = scores.get("dimensions", {})
+    dims_ok = all(dims.get(d, {}).get("score", 0) >= 6.0
                   for d in ("architecture", "tests", "lint", "intent"))
 
     if avg >= 8.0 and dims_ok:
