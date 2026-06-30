@@ -23,22 +23,17 @@ RUN dnf install -y --nodocs --allowerasing \
     && alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
 
-# Go 1.22
-RUN curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+# Go 1.24 (required by mlflow-go)
+ARG TARGETARCH
+RUN curl -fsSL "https://go.dev/dl/go1.24.4.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/home/claude-ci/go"
 
-# Node.js 20 LTS
-RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+# Node.js 22 (required by odh-dashboard: engines.node >= 22)
+RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
     && dnf install -y --nodocs nodejs \
     && dnf clean all \
     && npm install -g yarn
-
-# Rust (via rustup, installed for all users)
-ENV RUSTUP_HOME="/usr/local/rustup"
-ENV CARGO_HOME="/usr/local/cargo"
-ENV PATH="/usr/local/cargo/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
 
 # Python packages needed by epic-code-gen
 RUN pip3 install --no-cache-dir pyyaml pytest
@@ -57,8 +52,6 @@ RUN python3 --version \
     && go version \
     && node --version \
     && npm --version \
-    && rustc --version \
-    && cargo --version \
     && runuser -u claude-ci -- claude --version
 
 USER claude-ci
