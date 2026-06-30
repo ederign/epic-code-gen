@@ -1,0 +1,65 @@
+FROM registry.access.redhat.com/ubi9/ubi:latest
+
+# Base tools (mirrors strat-pipeline's setup-claude-ci.sh, baked in for speed)
+RUN dnf install -y --nodocs --allowerasing \
+        git-core \
+        shadow-utils \
+        util-linux \
+        python3.11 \
+        python3.11-pip \
+        python3.11-devel \
+        gcc \
+        make \
+        diffutils \
+        patch \
+        findutils \
+        which \
+        tar \
+        gzip \
+        unzip \
+        curl \
+        wget \
+    && dnf clean all \
+    && alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
+
+# Go 1.22
+RUN curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/home/claude-ci/go"
+
+# Node.js 20 LTS
+RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+    && dnf install -y --nodocs nodejs \
+    && dnf clean all \
+    && npm install -g yarn
+
+# Rust (via rustup, installed for all users)
+ENV RUSTUP_HOME="/usr/local/rustup"
+ENV CARGO_HOME="/usr/local/cargo"
+ENV PATH="/usr/local/cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
+
+# Python packages needed by epic-code-gen
+RUN pip3 install --no-cache-dir pyyaml pytest
+
+# Non-root user (required by Claude Code)
+RUN useradd -m claude-ci \
+    && mkdir -p /home/claude-ci/.local/bin \
+    && chown -R claude-ci:claude-ci /home/claude-ci
+
+# Claude Code CLI
+RUN runuser -l claude-ci -c 'curl -fsSL https://claude.ai/install.sh | bash'
+ENV PATH="/home/claude-ci/.claude/local/bin:/home/claude-ci/.local/bin:${PATH}"
+
+# Verify installations
+RUN python3 --version \
+    && go version \
+    && node --version \
+    && npm --version \
+    && rustc --version \
+    && cargo --version \
+    && runuser -u claude-ci -- claude --version
+
+USER claude-ci
+WORKDIR /home/claude-ci
