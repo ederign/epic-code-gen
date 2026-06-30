@@ -47,6 +47,12 @@ RUN useradd -m claude-ci \
 RUN runuser -l claude-ci -c 'curl -fsSL https://claude.ai/install.sh | bash'
 ENV PATH="/home/claude-ci/.claude/local/bin:/home/claude-ci/.local/bin:${PATH}"
 
+# Trust /tmp/claude-workdir so Claude Code loads .claude/settings.json
+RUN mkdir -p /home/claude-ci && \
+    echo '{"projects":{"/tmp/claude-workdir":{"hasTrustDialogAccepted":true}}}' \
+    > /home/claude-ci/.claude.json && \
+    chown claude-ci:claude-ci /home/claude-ci/.claude.json
+
 # Verify installations
 RUN python3 --version \
     && go version \
