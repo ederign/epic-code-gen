@@ -1,5 +1,11 @@
 {
   "opendatahub-io/odh-dashboard": {
-    "keywords": ["dashboard", "frontend", "patternfly", "ui"]
+    "keywords": ["dashboard", "frontend", "patternfly", "ui", "gen-ai-ui", "gen ai studio"]
+  },
+  "opendatahub-io/mlflow-go": {
+    "keywords": ["mlflow-go", "mlflow go", "go sdk", "mlflow go sdk"]
+  },
+  "opendatahub-io/mlflow": {
+    "keywords": ["mlflow react", "mlflow/server/js", "mlflow embedded", "prompt registry table", "mlflow ui"]
   }
 }
