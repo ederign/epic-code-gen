@@ -893,6 +893,32 @@ def save_epic_state(data_repo, strategy_key, epic_id, state):
                 f.write(f"{k}: {v}\n")
 
 
+def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
+                                         output_dir):
+    """Copy codegen artifacts (specs, plans, diffs, reviews) to the data repo."""
+    src = os.path.join(output_dir, "codegen-runs", epic_id)
+    if not os.path.isdir(src):
+        return
+    dest = os.path.join(data_repo, strategy_key, epic_id)
+    os.makedirs(dest, exist_ok=True)
+
+    for name in ("codegen-spec.md", "codegen-plan.md",
+                 "final-diff.patch", "best-diff.patch"):
+        s = os.path.join(src, name)
+        if os.path.isfile(s):
+            shutil.copy2(s, os.path.join(dest, name))
+
+    for entry in sorted(os.listdir(src)):
+        v_src = os.path.join(src, entry)
+        if os.path.isdir(v_src) and entry.startswith("v"):
+            v_dest = os.path.join(dest, entry)
+            os.makedirs(v_dest, exist_ok=True)
+            for f in os.listdir(v_src):
+                sf = os.path.join(v_src, f)
+                if os.path.isfile(sf):
+                    shutil.copy2(sf, os.path.join(v_dest, f))
+
+
 def ci_process_epic(epic, state, args, server, user, token):
     """State machine: decide action based on epic's current CI state.
 
@@ -999,6 +1025,8 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
     success = invoke_codegen(epic_id, args)
+    _copy_codegen_artifacts_to_data_repo(
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
     if success:
         state["status"] = "ReviewPending"
         save_epic_state(
@@ -1028,6 +1056,9 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
 
     with open(scores_path) as f:
         scores = json.load(f)
+
+    _copy_codegen_artifacts_to_data_repo(
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
 
     state["scores"] = scores
     avg = scores.get("weighted_average", 0)
@@ -1154,6 +1185,9 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         os.makedirs(revision_dir, exist_ok=True)
         with open(os.path.join(revision_dir, "revision-notes.md"), "w") as f:
             f.write(feedback)
+
+        _copy_codegen_artifacts_to_data_repo(
+            args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
 
         state["status"] = "Ready"
         save_epic_state(
