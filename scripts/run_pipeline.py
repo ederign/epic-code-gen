@@ -1174,6 +1174,10 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
         if new_state == state.get("status"):
             return SKIPPED, "PRCreated", "PRCreated", "No status change"
 
+        if args.dry_run:
+            return PROCESSED, "PRCreated", new_state, \
+                f"dry-run: would transition to {new_state}"
+
         state["status"] = new_state
         state["pr_state"] = "merged" if status["merged"] else status["state"]
         save_epic_state(
@@ -1208,6 +1212,10 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
     if not pr_url:
         return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
             "No PR URL"
+
+    if args.dry_run:
+        return PROCESSED, "PRChangesRequested", "PRChangesRequested", \
+            "dry-run: would invoke review response"
 
     max_iter = state.get("max_iterations", 5)
     version = state.get("current_version", 1)

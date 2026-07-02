@@ -278,3 +278,18 @@ class TestCIStateMachine:
 
         assert action == SKIPPED
         assert "No PR URL" in detail
+
+    def test_pr_changes_dry_run_does_not_invoke(self, tmp_path):
+        epic = _epic("E001")
+        state = {"status": "PRChangesRequested",
+                 "pr_url": "https://github.com/org/repo/pull/1",
+                 "current_version": 1, "max_iterations": 5}
+        args = _args(tmp_path, dry_run=True)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert "dry-run" in detail
+        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert loaded is None
