@@ -993,7 +993,7 @@ def _init_epic_state(epic):
         "target_repo": epic.get("target_repo", ""),
         "target_branch": "main",
         "current_version": 0,
-        "max_iterations": 3,
+        "max_iterations": 5,
         "timestamps": {"created": now},
     }
 
@@ -1128,20 +1128,42 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
 
 
 def _ci_handle_pr_created(epic, state, args, server, user, token):
-    """Check PR status on GitHub."""
+    """Check PR status on GitHub, including unprocessed inline comments."""
     epic_id = epic["epic_id"]
     pr_url = state.get("pr_url")
     if not pr_url:
         return SKIPPED, "PRCreated", "PRCreated", "No PR URL"
 
     try:
-        from pr_lifecycle import get_pr_status, derive_pr_state
+        from pr_lifecycle import (
+            get_pr_status, derive_pr_state,
+            get_pr_reviews, filter_unprocessed_comments,
+            load_processed_comment_ids,
+        )
         gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
         if not gh_token:
             return SKIPPED, "PRCreated", "PRCreated", "No GitHub token"
 
         status = get_pr_status(pr_url, gh_token)
         new_state = derive_pr_state(status)
+
+        # V2: also check for unprocessed inline comments
+        if new_state == "PRCreated":
+            reviews_data = get_pr_reviews(pr_url, gh_token)
+            pr_replies_path = os.path.join(
+                args.output_dir, "codegen-runs", epic_id, "pr-replies.json")
+            processed_ids = load_processed_comment_ids(pr_replies_path)
+            config_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "config", "review_config.json")
+            our_user = "dora-the-ai-coder"
+            if os.path.isfile(config_path):
+                with open(config_path) as f:
+                    our_user = json.load(f).get("our_user", our_user)
+            unprocessed = filter_unprocessed_comments(
+                reviews_data["comments"], processed_ids, our_user)
+            if unprocessed:
+                new_state = "PRChangesRequested"
 
         if new_state == state.get("status"):
             return SKIPPED, "PRCreated", "PRCreated", "No status change"
@@ -1156,7 +1178,7 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
             return PROCESSED, "PRCreated", "Done", "PR merged"
         elif new_state == "PRChangesRequested":
             return PROCESSED, "PRCreated", "PRChangesRequested", \
-                "Review changes requested"
+                "Unprocessed review comments found"
         elif new_state == "Ready":
             return PROCESSED, "PRCreated", "Ready", "PR closed, will retry"
         return SKIPPED, "PRCreated", new_state, f"State → {new_state}"
@@ -1174,14 +1196,14 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
 
 
 def _ci_handle_pr_changes(epic, state, args, server, user, token):
-    """Pull review comments and prepare the next iteration."""
+    """V2: respond to PR review comments with targeted fixes."""
     epic_id = epic["epic_id"]
     pr_url = state.get("pr_url")
     if not pr_url:
         return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
             "No PR URL"
 
-    max_iter = state.get("max_iterations", 3)
+    max_iter = state.get("max_iterations", 5)
     version = state.get("current_version", 1)
     if version >= max_iter:
         state["status"] = "Failed"
@@ -1192,35 +1214,104 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         return FAILED, "PRChangesRequested", "Failed", \
             f"Exhausted {max_iter} iterations"
 
-    try:
-        from pr_lifecycle import get_pr_reviews, format_review_feedback
-        gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
-        if not gh_token:
-            return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
-                "No GitHub token for review fetch"
+    gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+    if not gh_token:
+        return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
+            "No GitHub token"
 
-        reviews_data = get_pr_reviews(pr_url, gh_token)
-        feedback = format_review_feedback(reviews_data)
+    next_version = version + 1
 
-        next_version = version + 1
-        revision_dir = os.path.join(
-            args.output_dir, "codegen-runs", epic_id, f"v{next_version}")
-        os.makedirs(revision_dir, exist_ok=True)
-        with open(os.path.join(revision_dir, "revision-notes.md"), "w") as f:
-            f.write(feedback)
+    # Setup target repo with existing branch from fork
+    target_repo = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", ".target-repo")
+    setup_ok = _setup_target_for_review_response(
+        epic, state, args, target_repo)
 
-        _copy_codegen_artifacts_to_data_repo(
-            args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
-
-        state["status"] = "Ready"
+    if not setup_ok:
+        state["status"] = "Failed"
+        state["failure_reason"] = "Target repo setup for review response failed"
         save_epic_state(
             args.data_repo, epic["strategy_key"], epic_id, state)
-        return PROCESSED, "PRChangesRequested", "Ready", \
-            f"Review feedback saved, will retry v{next_version}"
+        return FAILED, "PRChangesRequested", "Failed", \
+            "Target repo setup failed"
 
-    except ImportError:
-        return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
-            "pr_lifecycle not available"
+    # Invoke review_response.py
+    review_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "review_response.py")
+    cmd = [
+        sys.executable, review_script, epic_id, pr_url,
+        "--output-dir", args.output_dir,
+        "--target-repo", target_repo,
+        "--version", str(next_version),
+        "--json",
+    ]
+    if args.dry_run:
+        cmd.append("--dry-run")
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1200)
+
+        if result.stdout.strip():
+            response = json.loads(result.stdout.strip())
+        else:
+            response = {"success": False, "errors": [result.stderr]}
+
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        response = {"success": False, "errors": [str(e)]}
+
+    _copy_codegen_artifacts_to_data_repo(
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
+
+    if response.get("success"):
+        state["status"] = "PRCreated"
+        state["current_version"] = next_version
+        state["timestamps"]["last_run"] = (
+            datetime.now(timezone.utc).isoformat())
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        detail = (f"V{next_version} review response: "
+                  f"{response.get('fixes_applied', 0)} fixes applied")
+        return PROCESSED, "PRChangesRequested", "PRCreated", detail
+    else:
+        errs = response.get("errors", ["unknown error"])
+        state["status"] = "Failed"
+        state["failure_reason"] = f"Review response failed: {errs}"
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        return FAILED, "PRChangesRequested", "Failed", \
+            f"Review response failed: {errs}"
+
+
+def _setup_target_for_review_response(epic, state, args, target_repo):
+    """Setup target repo for review response: checkout existing branch."""
+    epic_id = epic["epic_id"]
+    target_url = epic.get("target_repo", state.get("target_repo", ""))
+    if not target_url:
+        return False
+
+    clone_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "clone_target.py")
+    cmd = [
+        sys.executable, clone_script, target_url, epic_id,
+        "--dest", target_repo, "--checkout-existing",
+    ]
+    fork_owner = getattr(args, "fork_owner", None)
+    if fork_owner:
+        cmd += ["--fork-owner", fork_owner,
+                "--gh-token-var", "EPIC_CODEGEN_GITHUB_TOKEN"]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            print(f"  Checkout failed: {result.stderr.strip()}",
+                  file=sys.stderr)
+            return False
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"  Checkout error: {e}", file=sys.stderr)
+        return False
 
 
 def _ci_handle_blocked(epic, state, args, server, user, token):
