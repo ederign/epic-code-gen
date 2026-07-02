@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from run_pipeline import (
+    AUTOMATIONBOT_ACCOUNT_ID,
     BLOCKED,
     FAILED,
     PROCESSABLE_STATUSES,
@@ -145,6 +146,7 @@ class TestFindEligible:
 
 class TestProcessStrategy:
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -152,7 +154,7 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_linear_chain_processes_first_only(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """A→B chain: only A is eligible (B blocked by A)."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -175,6 +177,7 @@ class TestProcessStrategy:
         assert results[BLOCKED][0][0] == "A-2"
         mock_invoke.assert_called_once_with("A-1", args)
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -182,7 +185,7 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_deps_all_eligible(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """Two independent epics: both eligible."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -201,6 +204,7 @@ class TestProcessStrategy:
         assert len(results[PROCESSED]) == 2
         assert len(results[BLOCKED]) == 0
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=False)
@@ -208,7 +212,7 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_failure_blocks_dependents(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """A fails → B stays blocked."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -230,10 +234,12 @@ class TestProcessStrategy:
         assert len(results[BLOCKED]) == 1
         assert results[BLOCKED][0][0] == "A-2"
 
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
-    def test_all_done_in_jira(self, mock_gen, mock_dag, mock_fetch):
+    def test_all_done_in_jira(self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
         """All epics already Done → all skipped."""
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
@@ -283,6 +289,7 @@ class TestProcessStrategy:
         assert transitions_log == {}
         assert pr_urls == {}
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen")
@@ -290,7 +297,7 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_mixed_results(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """One done, one eligible succeeds, one eligible fails, one blocked."""
         issues = [{"key": f"A-{i}", "fields": {}} for i in range(1, 5)]
         mock_fetch.return_value = issues
@@ -828,6 +835,7 @@ class TestTransitionIssue:
 
 class TestProcessStrategyTransitions:
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -835,7 +843,7 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_to_in_progress_before_codegen(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -847,8 +855,10 @@ class TestProcessStrategyTransitions:
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
-        assert calls[0] == mock.call("s", "u", "t", "A-1", "In Progress")
+        assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
+        assert calls[1] == mock.call("s", "u", "t", "A-1", "In Progress")
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -856,7 +866,7 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_to_in_review_after_success(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -868,9 +878,10 @@ class TestProcessStrategyTransitions:
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
-        assert len(calls) == 2
-        assert calls[1] == mock.call("s", "u", "t", "A-1", "Review")
+        assert len(calls) == 3
+        assert calls[2] == mock.call("s", "u", "t", "A-1", "Review")
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=False)
@@ -878,7 +889,7 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_failure_rolls_back_to_original_status(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -890,16 +901,18 @@ class TestProcessStrategyTransitions:
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
-        assert len(calls) == 2
-        assert calls[0] == mock.call("s", "u", "t", "A-1", "In Progress")
-        assert calls[1] == mock.call("s", "u", "t", "A-1", "New")
+        assert len(calls) == 3
+        assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
+        assert calls[1] == mock.call("s", "u", "t", "A-1", "In Progress")
+        assert calls[2] == mock.call("s", "u", "t", "A-1", "New")
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_dry_run_skips_transitions(
-            self, mock_gen, mock_dag, mock_fetch, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_trans, mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -910,7 +923,9 @@ class TestProcessStrategyTransitions:
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         mock_trans.assert_not_called()
+        mock_assign.assert_not_called()
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -918,7 +933,7 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_transitions_captured_in_log(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
@@ -1052,6 +1067,7 @@ class TestLinkPrToJira:
 
 class TestProcessStrategyPrLinking:
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.link_pr_to_jira", return_value=True)
     @mock.patch("run_pipeline.read_pr_url",
                 return_value="https://github.com/org/repo/pull/42")
@@ -1063,7 +1079,7 @@ class TestProcessStrategyPrLinking:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_links_pr_after_successful_codegen(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
-            mock_trans, mock_read_pr, mock_link):
+            mock_trans, mock_read_pr, mock_link, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1079,6 +1095,7 @@ class TestProcessStrategyPrLinking:
             "https://github.com/org/repo/pull/42")
         assert pr_urls == {"A-1": "https://github.com/org/repo/pull/42"}
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.link_pr_to_jira")
     @mock.patch("run_pipeline.read_pr_url", return_value=None)
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -1089,7 +1106,7 @@ class TestProcessStrategyPrLinking:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_link_when_no_pr_url(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
-            mock_trans, mock_read_pr, mock_link):
+            mock_trans, mock_read_pr, mock_link, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1196,6 +1213,7 @@ class TestLoadPrUrlsFromLogs:
 
 class TestProcessableStatuses:
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.setup_target_repo", return_value=True)
     @mock.patch("run_pipeline.invoke_codegen", return_value=True)
@@ -1203,7 +1221,7 @@ class TestProcessableStatuses:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_new_epic_is_eligible(
-            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans):
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1217,11 +1235,13 @@ class TestProcessableStatuses:
         assert len(results[PROCESSED]) == 1
         assert results[PROCESSED][0][0] == "A-1"
 
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_in_progress_epic_is_skipped(
-            self, mock_gen, mock_dag, mock_fetch):
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1236,11 +1256,13 @@ class TestProcessableStatuses:
         assert "Active" in results[SKIPPED][0][1]
         assert len(results[PROCESSED]) == 0
 
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_in_review_epic_is_skipped(
-            self, mock_gen, mock_dag, mock_fetch):
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1259,6 +1281,7 @@ class TestProcessableStatuses:
 
 class TestReconciliation:
 
+    @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.check_pr_merged", return_value=True)
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.load_pr_urls_from_logs",
@@ -1268,7 +1291,7 @@ class TestReconciliation:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_merged_pr_transitions_to_done(
             self, mock_gen, mock_dag, mock_fetch, mock_logs,
-            mock_trans, mock_merged):
+            mock_trans, mock_merged, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
@@ -1293,6 +1316,8 @@ class TestReconciliation:
         assert len(results[PROCESSED]) == 1
         assert results[PROCESSED][0][0] == "A-2"
 
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.check_pr_merged", return_value=False)
     @mock.patch("run_pipeline.load_pr_urls_from_logs",
                 return_value={"A-1": "https://github.com/org/repo/pull/1"})
@@ -1300,7 +1325,7 @@ class TestReconciliation:
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_unmerged_pr_stays_skipped(
-            self, mock_gen, mock_dag, mock_fetch, mock_logs, mock_merged):
+            self, mock_gen, mock_dag, mock_fetch, mock_logs, mock_merged, _mock_trans, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
@@ -1321,12 +1346,14 @@ class TestReconciliation:
         assert len(results[BLOCKED]) == 1
         assert results[BLOCKED][0][0] == "A-2"
 
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.load_pr_urls_from_logs", return_value={})
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_pr_url_stays_skipped(
-            self, mock_gen, mock_dag, mock_fetch, mock_logs):
+            self, mock_gen, mock_dag, mock_fetch, mock_logs, _mock_trans, _mock_assign):
         issues = [{"key": "A-1", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
@@ -1339,3 +1366,76 @@ class TestReconciliation:
 
         assert len(results[SKIPPED]) == 1
         assert "Active" in results[SKIPPED][0][1]
+
+
+# ─── TestAssignment ──────────────────────────────────────────────────────
+
+class TestAssignment:
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_assigns_strat_and_epic_to_automationbot(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            _mock_setup, mock_trans, mock_assign):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            process_strategy("RHAISTRAT-1", "s", "u", "t", args)
+
+        calls = mock_assign.call_args_list
+        assert len(calls) == 2
+        assert calls[0] == mock.call(
+            "s", "u", "t", "RHAISTRAT-1", AUTOMATIONBOT_ACCOUNT_ID)
+        assert calls[1] == mock.call(
+            "s", "u", "t", "A-1", AUTOMATIONBOT_ACCOUNT_ID)
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.setup_target_repo", return_value=True)
+    @mock.patch("run_pipeline.invoke_codegen", return_value=True)
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_strat_transition_to_in_progress(
+            self, mock_gen, mock_dag, mock_fetch, mock_invoke,
+            _mock_setup, mock_trans, _mock_assign):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            process_strategy("RHAISTRAT-1", "s", "u", "t", args)
+
+        calls = mock_trans.call_args_list
+        assert calls[0] == mock.call(
+            "s", "u", "t", "RHAISTRAT-1", "In Progress")
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue")
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_dry_run_skips_assignment_and_strat_transition(
+            self, mock_gen, mock_dag, mock_fetch, mock_trans, mock_assign):
+        issues = [{"key": "A-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("A-1")):
+            args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
+            process_strategy("RHAISTRAT-1", "s", "u", "t", args)
+
+        mock_assign.assert_not_called()
+        mock_trans.assert_not_called()

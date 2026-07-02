@@ -45,6 +45,7 @@ from fetch_jira_epics import (
 )
 from jira_utils import (
     add_comment,
+    assign_issue,
     do_transition,
     get_transitions,
     markdown_to_adf,
@@ -62,6 +63,7 @@ BLOCKED = "blocked"
 FAILED = "failed"
 
 PROCESSABLE_STATUSES = {"New", "To Do", "Open"}
+AUTOMATIONBOT_ACCOUNT_ID = "712020:9efc6a2a-8d76-4879-b330-502b84a3e040"
 
 CI_STATES = {
     "Pending", "Ready", "Generating", "ReviewPending",
@@ -609,6 +611,11 @@ def process_strategy(strategy_key, server, user, token, args):
     if not args.no_strategy:
         fetch_strategy(strategy_key, strategies_dir)
 
+    if not args.dry_run:
+        transition_issue(server, user, token, strategy_key, "In Progress")
+        assign_issue(server, user, token, strategy_key,
+                     AUTOMATIONBOT_ACCOUNT_ID)
+
     results = {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}
     transitions_log = {}
     pr_urls = {}
@@ -692,6 +699,8 @@ def process_strategy(strategy_key, server, user, token, args):
             server, user, token, epic_id, "In Progress")
         epic_transitions.append({
             "to": "In Progress", "success": ok})
+        assign_issue(server, user, token, epic_id,
+                     AUTOMATIONBOT_ACCOUNT_ID)
 
         original_status = all_epics_by_key[epic_id].get("jira_status", "")
 
@@ -1030,6 +1039,7 @@ def _ci_handle_ready(epic, state, args, server, user, token):
         return FAILED, "Ready", "Failed", "target repo setup failed"
 
     transition_issue(server, user, token, epic_id, "In Progress")
+    assign_issue(server, user, token, epic_id, AUTOMATIONBOT_ACCOUNT_ID)
 
     state["status"] = "Generating"
     state["current_version"] = state.get("current_version", 0) + 1
@@ -1311,6 +1321,11 @@ def process_strategy_ci(strategy_key, server, user, token, args):
         repo = resolve_target_repo(epic, mapping)
         if repo:
             epic["target_repo"] = repo
+
+    if not args.dry_run:
+        transition_issue(server, user, token, strategy_key, "In Progress")
+        assign_issue(server, user, token, strategy_key,
+                     AUTOMATIONBOT_ACCOUNT_ID)
 
     results = {PROCESSED: [], SKIPPED: [], BLOCKED: [], FAILED: []}
     actions_log = []

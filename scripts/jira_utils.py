@@ -295,6 +295,17 @@ def update_issue(server, user, token, issue_key, summary, description_adf):
     api_call_with_retry(server, path, user, token, body=body, method="PUT")
 
 
+def assign_issue(server, user, token, issue_key, account_id):
+    """PUT to assign an issue to a user by accountId."""
+    body = {
+        "fields": {
+            "assignee": {"accountId": account_id},
+        }
+    }
+    path = f"/issue/{issue_key}"
+    api_call_with_retry(server, path, user, token, body=body, method="PUT")
+
+
 def add_labels(server, user, token, issue_key, labels):
     """Add labels to an existing issue without removing existing ones."""
     body = {
