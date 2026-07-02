@@ -244,7 +244,7 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
     owner, repo, number = parse_pr_url(pr_url)
 
     # 1. Fetch and filter comments
-    print(f"Fetching PR comments from {pr_url}...")
+    print(f"Fetching PR comments from {pr_url}...", file=sys.stderr)
     reviews_data = get_pr_reviews(pr_url, token)
     all_comments = reviews_data["comments"]
 
@@ -256,7 +256,7 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
         all_comments, processed_ids, our_user)
 
     if not unprocessed:
-        print("No unprocessed comments found.")
+        print("No unprocessed comments found.", file=sys.stderr)
         return {
             "success": True,
             "comments_processed": 0,
@@ -265,19 +265,20 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
             "errors": [],
         }
 
-    print(f"Found {len(unprocessed)} unprocessed comment(s).")
+    print(f"Found {len(unprocessed)} unprocessed comment(s).", file=sys.stderr)
 
     # 2. Compute diff scope
-    print("Computing diff scope...")
+    print("Computing diff scope...", file=sys.stderr)
     pr_files = get_pr_files(owner, repo, number, token)
     diff_scope = compute_diff_scope(pr_files)
-    print(f"  {len(diff_scope)} files in our diff scope.")
+    print(f"  {len(diff_scope)} files in our diff scope.", file=sys.stderr)
 
     # 3. Triage comments
     triaged = triage_comments(unprocessed, diff_scope, bot_reviewers)
     to_fix = [c for c in triaged if c["action"] == "fix"]
     to_skip = [c for c in triaged if c["action"] != "fix"]
-    print(f"  {len(to_fix)} to fix, {len(to_skip)} to skip.")
+    print(f"  {len(to_fix)} to fix, {len(to_skip)} to skip.",
+          file=sys.stderr)
 
     # 4. Write artifacts
     version_dir = os.path.join(
@@ -289,7 +290,7 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
 
     write_review_feedback(triaged, feedback_path)
     write_response_plan(triaged, plan_path)
-    print(f"  Artifacts written to {version_dir}/")
+    print(f"  Artifacts written to {version_dir}/", file=sys.stderr)
 
     # 5. Record pre-fix state
     commit_sha = None
@@ -312,7 +313,7 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
         spec_path = os.path.join(
             output_dir, "codegen-runs", epic_id, "codegen-spec.md")
 
-        print("Invoking fix agent...")
+        print("Invoking fix agent...", file=sys.stderr)
         fix_prompt = _build_fix_prompt(
             plan_path, feedback_path, spec_path, target_repo, version)
 
@@ -324,7 +325,8 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
         else:
             # 7. Run validation with retry
             for attempt in range(1, max_retries + 1):
-                print(f"  Validation attempt {attempt}/{max_retries}...")
+                print(f"  Validation attempt {attempt}/{max_retries}...",
+                      file=sys.stderr)
                 passed, val_result = run_validation(target_repo)
 
                 val_path = os.path.join(version_dir, "validation.json")
@@ -332,11 +334,12 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                     json.dump(val_result, f, indent=2)
 
                 if passed:
-                    print("  Validation PASSED.")
+                    print("  Validation PASSED.", file=sys.stderr)
                     break
 
                 if attempt < max_retries:
-                    print("  Validation failed, retrying fix...")
+                    print("  Validation failed, retrying fix...",
+                          file=sys.stderr)
                     retry_prompt = _build_validation_retry_prompt(
                         val_result, target_repo)
                     _invoke_claude(retry_prompt, target_repo)
@@ -362,14 +365,14 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                     f.write(diff_result.stdout)
 
                 # 8. Run sanity check
-                print("Running sanity check...")
+                print("Running sanity check...", file=sys.stderr)
                 _run_sanity_check(
                     plan_path, diff_path, feedback_path, version_dir,
                     target_repo)
 
                 # 9. Push to fork
                 if not errors:
-                    print("Pushing to fork...")
+                    print("Pushing to fork...", file=sys.stderr)
                     push_result = subprocess.run(
                         ["git", "push", "fork", f"epic/{epic_id}"],
                         cwd=target_repo, capture_output=True, text=True,
@@ -380,20 +383,20 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                               file=sys.stderr)
                         commit_sha = "not-pushed"
                     else:
-                        print("  Pushed successfully.")
+                        print("  Pushed successfully.", file=sys.stderr)
             else:
-                print("  No changes made by fix agent.")
+                print("  No changes made by fix agent.", file=sys.stderr)
                 commit_sha = None
 
     # 10. Post replies
     reply_sha = commit_sha or "no-change"
     if errors:
         reply_sha = "not-pushed"
-    print("Posting PR replies...")
+    print("Posting PR replies...", file=sys.stderr)
     replies = post_replies(
         triaged, reply_sha, pr_url, token, dry_run=dry_run)
     save_pr_replies(replies, pr_replies_path, version)
-    print(f"  Posted {len(replies)} replies.")
+    print(f"  Posted {len(replies)} replies.", file=sys.stderr)
 
     success = len(errors) == 0
     return {
