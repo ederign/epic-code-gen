@@ -1,6 +1,7 @@
 """Tests for V2 code review response functions.
 
-Tests diff scope computation, comment filtering, and scope checking.
+Tests diff scope computation, comment filtering, scope checking,
+triage logic, and artifact writing.
 """
 
 import json
@@ -225,3 +226,157 @@ class TestLoadProcessedCommentIds:
             ids = load_processed_comment_ids(f.name)
         os.unlink(f.name)
         assert ids == set()
+
+
+# ─── Orchestrator Tests ──────────────────────────────────────────────────────
+
+from review_response import (
+    triage_comments,
+    write_review_feedback,
+    write_response_plan,
+    save_pr_replies,
+    load_review_config,
+)
+
+
+class TestTriageComments:
+
+    def _comment(self, user="human", path="src/main.go", line=10):
+        return {
+            "id": 1,
+            "user": user,
+            "path": path,
+            "line": line,
+            "body": "fix this",
+            "created_at": "2026-07-01T00:00:00Z",
+            "in_reply_to": None,
+            "diff_hunk": "",
+            "commit_id": "",
+        }
+
+    def test_human_comment_in_scope_is_fix(self):
+        scope = {"src/main.go": {10}}
+        result = triage_comments(
+            [self._comment(user="alice")], scope, {"coderabbitai"})
+        assert result[0]["action"] == "fix"
+        assert result[0]["is_bot"] is False
+
+    def test_bot_comment_in_scope_is_fix(self):
+        scope = {"src/main.go": {10}}
+        result = triage_comments(
+            [self._comment(user="coderabbitai")], scope, {"coderabbitai"})
+        assert result[0]["action"] == "fix"
+        assert result[0]["is_bot"] is True
+
+    def test_comment_out_of_scope_is_skipped(self):
+        scope = {"src/main.go": {99}}
+        result = triage_comments(
+            [self._comment(line=10)], scope, set())
+        assert result[0]["action"] == "skip_out_of_scope"
+
+    def test_comment_on_unmodified_file_is_skipped(self):
+        scope = {"src/other.go": {10}}
+        result = triage_comments(
+            [self._comment(path="src/main.go")], scope, set())
+        assert result[0]["action"] == "skip_out_of_scope"
+
+    def test_mixed_triage(self):
+        scope = {"src/main.go": {10, 20}}
+        comments = [
+            self._comment(user="human", line=10),
+            self._comment(user="coderabbitai", line=20),
+            self._comment(user="human", line=50),
+        ]
+        result = triage_comments(comments, scope, {"coderabbitai"})
+        assert result[0]["action"] == "fix"
+        assert result[1]["action"] == "fix"
+        assert result[2]["action"] == "skip_out_of_scope"
+
+
+class TestWriteArtifacts:
+
+    def test_write_review_feedback(self):
+        comments = [{
+            "id": 1, "user": "alice", "path": "src/main.go", "line": 10,
+            "body": "Missing nil check", "is_bot": False,
+            "action": "fix", "reason": "human",
+            "diff_hunk": "@@ -10 +10 @@\n-old\n+new",
+            "created_at": "", "in_reply_to": None, "commit_id": "",
+        }]
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False) as f:
+            path = f.name
+        write_review_feedback(comments, path)
+        content = open(path).read()
+        os.unlink(path)
+        assert "`src/main.go`" in content
+        assert "Missing nil check" in content
+        assert "alice" in content
+
+    def test_write_response_plan(self):
+        comments = [
+            {"id": 1, "user": "alice", "path": "a.go", "line": 10,
+             "body": "Fix this", "action": "fix", "reason": "human",
+             "is_bot": False},
+            {"id": 2, "user": "bot", "path": "b.go", "line": 20,
+             "body": "Refactor", "action": "skip_out_of_scope",
+             "reason": "out of scope", "is_bot": True},
+        ]
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False) as f:
+            path = f.name
+        write_response_plan(comments, path)
+        content = open(path).read()
+        os.unlink(path)
+        assert "To fix:** 1" in content
+        assert "To skip:** 1" in content
+        assert "Fix this" in content
+
+
+class TestSavePrReplies:
+
+    def test_creates_new_file(self):
+        with tempfile.NamedTemporaryFile(
+                suffix=".json", delete=False) as f:
+            path = f.name
+        os.unlink(path)
+
+        replies = [{"comment_id": 1, "action": "fix", "reply_body": "Done"}]
+        save_pr_replies(replies, path, version=2)
+
+        with open(path) as f:
+            data = json.load(f)
+        os.unlink(path)
+        assert len(data["replies"]) == 1
+        assert data["replies"][0]["version"] == 2
+
+    def test_appends_to_existing(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False) as f:
+            json.dump({
+                "replies": [
+                    {"comment_id": 1, "version": 2, "action": "fix",
+                     "reply_body": "Fixed"},
+                ],
+            }, f)
+            path = f.name
+
+        new_replies = [
+            {"comment_id": 2, "action": "skip", "reply_body": "N/A"},
+        ]
+        save_pr_replies(new_replies, path, version=3)
+
+        with open(path) as f:
+            data = json.load(f)
+        os.unlink(path)
+        assert len(data["replies"]) == 2
+        assert data["replies"][1]["version"] == 3
+
+
+class TestLoadReviewConfig:
+
+    def test_loads_config(self):
+        config = load_review_config()
+        assert "bot_reviewers" in config
+        assert "our_user" in config
+        assert "coderabbitai" in config["bot_reviewers"]
