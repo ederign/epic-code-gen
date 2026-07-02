@@ -1543,6 +1543,13 @@ def main(argv=None):
     log_path = write_run_log(run_log, args.log_dir)
     print(f"\nRun log: {log_path}")
 
+    if all_actions:
+        actions_path = os.path.join(args.log_dir, "actions.json")
+        os.makedirs(args.log_dir, exist_ok=True)
+        with open(actions_path, "w") as f:
+            json.dump(all_actions, f, indent=2)
+        print(f"Actions log: {actions_path}")
+
     print_summary(all_results)
 
     has_failures = any(
