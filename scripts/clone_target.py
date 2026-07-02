@@ -208,6 +208,52 @@ def _ensure_branch(dest, branch):
         _run_git(["git", "checkout", "-b", branch], cwd=dest)
 
 
+def checkout_existing_branch(dest, branch, fork_remote="fork"):
+    """Check out an existing branch from the fork, preserving its commits.
+
+    Unlike _ensure_branch which resets to origin/default, this fetches
+    the branch from the fork and checks it out as-is — V1 commits stay.
+
+    Args:
+        dest: path to the cloned repo.
+        branch: branch name (e.g., "epic/RHOAIENG-72528").
+        fork_remote: name of the fork remote (default: "fork").
+
+    Returns:
+        dict: {checked_out, branch, head_sha}.
+
+    Raises:
+        ValueError: if the branch does not exist on the fork remote.
+    """
+    _run_git(["git", "fetch", fork_remote], cwd=dest)
+
+    _, _, rc = _run_git(
+        ["git", "rev-parse", "--verify", f"{fork_remote}/{branch}"],
+        cwd=dest, check=False)
+    if rc != 0:
+        raise ValueError(
+            f"Branch {branch} does not exist on remote {fork_remote}")
+
+    stdout, _, _ = _run_git(
+        ["git", "branch", "--list", branch], cwd=dest, check=False)
+    if branch in stdout:
+        _run_git(["git", "checkout", branch], cwd=dest)
+        _run_git(
+            ["git", "reset", "--hard", f"{fork_remote}/{branch}"], cwd=dest)
+    else:
+        _run_git(
+            ["git", "checkout", "-b", branch, f"{fork_remote}/{branch}"],
+            cwd=dest)
+
+    head_sha, _, _ = _run_git(["git", "rev-parse", "HEAD"], cwd=dest)
+
+    return {
+        "checked_out": True,
+        "branch": branch,
+        "head_sha": head_sha,
+    }
+
+
 def _setup_fork_remote(dest, upstream_url, fork_owner, token=None):
     """Add fork remote pointing to the fork owner's copy.
 
@@ -256,19 +302,37 @@ def main():
                         help="Env var name for GitHub token (default: EPIC_CODEGEN_GITHUB_TOKEN)")
     parser.add_argument("--clean", action="store_true",
                         help="Delete existing clone first")
+    parser.add_argument("--checkout-existing", action="store_true",
+                        help="Checkout existing branch from fork "
+                             "(preserves V1 commits)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON")
     args = parser.parse_args()
 
     try:
-        result = clone(
-            args.repo_url,
-            args.epic_id,
-            dest=args.dest,
-            fork_owner=args.fork_owner,
-            clean=args.clean,
-            gh_token_var=args.gh_token_var,
-        )
+        if args.checkout_existing:
+            result = clone(
+                args.repo_url,
+                args.epic_id,
+                dest=args.dest,
+                fork_owner=args.fork_owner,
+                clean=False,
+                gh_token_var=args.gh_token_var,
+            )
+            branch = f"epic/{args.epic_id}"
+            checkout_result = checkout_existing_branch(
+                args.dest, branch, fork_remote="fork")
+            result["status"] = "checkout_existing"
+            result["head_sha"] = checkout_result["head_sha"]
+        else:
+            result = clone(
+                args.repo_url,
+                args.epic_id,
+                dest=args.dest,
+                fork_owner=args.fork_owner,
+                clean=args.clean,
+                gh_token_var=args.gh_token_var,
+            )
 
         if args.json:
             json.dump(result, sys.stdout, indent=2)
@@ -277,6 +341,8 @@ def main():
             print(f"Cloned to: {result['dest']}")
             print(f"Branch: {result['branch']}")
             print(f"Status: {result['status']}")
+            if result.get("head_sha"):
+                print(f"HEAD: {result['head_sha']}")
             if result["fork_url"]:
                 print(f"Fork remote: {result['fork_url']}")
             if result["fork_created"]:

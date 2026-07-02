@@ -93,6 +93,26 @@ def api_call_with_retry(path, token, body=None, method=None, max_retries=3):
     raise last_error
 
 
+def api_call_paginated(path, token, per_page=100):
+    """Fetch all pages of a paginated GitHub API endpoint.
+
+    Returns combined list of all items across all pages.
+    """
+    all_items = []
+    page = 1
+    while True:
+        separator = "&" if "?" in path else "?"
+        paged_path = f"{path}{separator}per_page={per_page}&page={page}"
+        items = api_call_with_retry(paged_path, token) or []
+        if not items:
+            break
+        all_items.extend(items)
+        if len(items) < per_page:
+            break
+        page += 1
+    return all_items
+
+
 # ─── Env ──────────────────────────────────────────────────────────────────────
 
 def require_env(token_var=None):
@@ -228,6 +248,31 @@ def create_pull_request(upstream_owner, upstream_repo, head_owner, branch,
     return api_call_with_retry(
         f"/repos/{upstream_owner}/{upstream_repo}/pulls",
         token, body=pr_body, method="POST",
+    )
+
+
+# ─── PR Review Operations ────────────────────────────────────────────────────
+
+def get_pr_files(owner, repo, pull_number, token):
+    """Fetch the list of files changed in a PR.
+
+    Returns list of {filename, status, additions, deletions, patch} dicts.
+    """
+    return api_call_paginated(
+        f"/repos/{owner}/{repo}/pulls/{pull_number}/files", token,
+    )
+
+
+def reply_to_review_comment(owner, repo, pull_number, comment_id, body, token):
+    """Post a threaded reply to a PR review comment.
+
+    Returns the created comment dict, or None on error.
+    """
+    return api_call_with_retry(
+        f"/repos/{owner}/{repo}/pulls/{pull_number}/comments",
+        token,
+        body={"body": body, "in_reply_to": comment_id},
+        method="POST",
     )
 
 
