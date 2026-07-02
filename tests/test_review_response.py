@@ -235,6 +235,7 @@ from review_response import (
     write_review_feedback,
     write_response_plan,
     save_pr_replies,
+    post_replies,
     load_review_config,
 )
 
@@ -371,6 +372,54 @@ class TestSavePrReplies:
         os.unlink(path)
         assert len(data["replies"]) == 2
         assert data["replies"][1]["version"] == 3
+
+
+class TestPostReplies:
+
+    def _triaged(self, action="fix"):
+        return {
+            "id": 42, "user": "reviewer", "path": "a.go", "line": 10,
+            "body": "fix this", "action": action, "reason": "test",
+            "is_bot": False, "diff_hunk": "", "commit_id": "",
+            "created_at": "", "in_reply_to": None,
+        }
+
+    def test_fix_with_real_sha(self):
+        replies = post_replies(
+            [self._triaged()], "abc12345deadbeef",
+            "https://github.com/org/repo/pull/1", "tok", dry_run=True)
+        assert "abc12345" in replies[0]["reply_body"]
+
+    def test_fix_with_no_change(self):
+        replies = post_replies(
+            [self._triaged()], "no-change",
+            "https://github.com/org/repo/pull/1", "tok", dry_run=True)
+        assert "Acknowledged" in replies[0]["reply_body"]
+        assert "Fixed" not in replies[0]["reply_body"]
+
+    def test_fix_with_not_pushed(self):
+        replies = post_replies(
+            [self._triaged()], "not-pushed",
+            "https://github.com/org/repo/pull/1", "tok", dry_run=True)
+        assert "Acknowledged" in replies[0]["reply_body"]
+
+    def test_skip_out_of_scope_reply(self):
+        replies = post_replies(
+            [self._triaged(action="skip_out_of_scope")], "abc123",
+            "https://github.com/org/repo/pull/1", "tok", dry_run=True)
+        assert "pre-existing code" in replies[0]["reply_body"]
+
+
+class TestLoadProcessedCorruptFile:
+
+    def test_malformed_json_returns_empty(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False) as f:
+            f.write("{broken json")
+            path = f.name
+        ids = load_processed_comment_ids(path)
+        os.unlink(path)
+        assert ids == set()
 
 
 class TestLoadReviewConfig:

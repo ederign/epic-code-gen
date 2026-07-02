@@ -288,9 +288,12 @@ def load_processed_comment_ids(pr_replies_path):
     """
     if not os.path.isfile(pr_replies_path):
         return set()
-    with open(pr_replies_path) as f:
-        data = json.load(f)
-    return {r["comment_id"] for r in data.get("replies", [])}
+    try:
+        with open(pr_replies_path) as f:
+            data = json.load(f)
+        return {r["comment_id"] for r in data.get("replies", [])}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return set()
 
 
 def derive_pr_state(status):

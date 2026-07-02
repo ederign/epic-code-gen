@@ -189,7 +189,12 @@ def post_replies(triaged_comments, commit_sha, pr_url, token, dry_run=False):
             continue
 
         if c["action"] == "fix":
-            body = f"Fixed in {commit_sha[:8]}."
+            if commit_sha and commit_sha not in ("no-change", "not-pushed"):
+                body = f"Fixed in {commit_sha[:8]}."
+            else:
+                body = ("Acknowledged — attempted to address this but no "
+                        "code changes were produced.")
+
         elif c["action"] == "skip_out_of_scope":
             body = ("This comment targets pre-existing code outside the scope "
                     "of this PR's changes. Not modified.")
@@ -295,6 +300,12 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
         pre_fix_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=target_repo, capture_output=True, text=True)
+        if pre_fix_result.returncode != 0:
+            errors.append("Target repo is not a valid git repository")
+            return {
+                "success": False, "comments_processed": len(triaged),
+                "fixes_applied": 0, "commit_sha": None, "errors": errors,
+            }
         pre_fix_sha = pre_fix_result.stdout.strip()
 
         # 6. Invoke fix agent via Claude
@@ -367,6 +378,7 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                         errors.append(f"Push failed: {push_result.stderr}")
                         print(f"  Push FAILED: {push_result.stderr}",
                               file=sys.stderr)
+                        commit_sha = "not-pushed"
                     else:
                         print("  Pushed successfully.")
             else:
@@ -374,9 +386,12 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                 commit_sha = None
 
     # 10. Post replies
+    reply_sha = commit_sha or "no-change"
+    if errors:
+        reply_sha = "not-pushed"
     print("Posting PR replies...")
     replies = post_replies(
-        triaged, commit_sha or "no-change", pr_url, token, dry_run=dry_run)
+        triaged, reply_sha, pr_url, token, dry_run=dry_run)
     save_pr_replies(replies, pr_replies_path, version)
     print(f"  Posted {len(replies)} replies.")
 

@@ -925,7 +925,8 @@ def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
         return
 
     for name in ("codegen-spec.md", "codegen-plan.md",
-                 "final-diff.patch", "best-diff.patch"):
+                 "final-diff.patch", "best-diff.patch",
+                 "pr-replies.json"):
         s = os.path.join(src, name)
         if os.path.isfile(s):
             shutil.copy2(s, os.path.join(dest, name))
@@ -1151,7 +1152,12 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
         if new_state == "PRCreated":
             reviews_data = get_pr_reviews(pr_url, gh_token)
             pr_replies_path = os.path.join(
-                args.output_dir, "codegen-runs", epic_id, "pr-replies.json")
+                args.data_repo, epic["strategy_key"], epic_id,
+                "pr-replies.json")
+            if not os.path.isfile(pr_replies_path):
+                pr_replies_path = os.path.join(
+                    args.output_dir, "codegen-runs", epic_id,
+                    "pr-replies.json")
             processed_ids = load_processed_comment_ids(pr_replies_path)
             config_path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
@@ -1266,7 +1272,7 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
     if response.get("success"):
         state["status"] = "PRCreated"
         state["current_version"] = next_version
-        state["timestamps"]["last_run"] = (
+        state.setdefault("timestamps", {})["last_run"] = (
             datetime.now(timezone.utc).isoformat())
         save_epic_state(
             args.data_repo, epic["strategy_key"], epic_id, state)
