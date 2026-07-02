@@ -1,0 +1,13 @@
+{
+  "bot_reviewers": [
+    "coderabbitai",
+    "copilot-pull-request-reviewer",
+    "Copilot",
+    "github-actions[bot]",
+    "codecov[bot]",
+    "sonarcloud[bot]"
+  ],
+  "our_user": "dora-the-ai-coder",
+  "max_review_iterations": 5,
+  "validation_retry_limit": 3
+}

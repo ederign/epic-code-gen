@@ -19,8 +19,10 @@ import urllib.error
 
 sys.path.insert(0, os.path.dirname(__file__))
 from github_utils import (
+    api_call_paginated,
     api_call_with_retry,
     extract_slug,
+    get_pr_files,
     require_env,
 )
 
@@ -123,15 +125,19 @@ def get_pr_reviews(pr_url, token):
             "submitted_at": r.get("submitted_at", ""),
         })
 
-    raw_comments = api_call_with_retry(
-        f"/repos/{owner}/{repo}/pulls/{number}/comments", token) or []
+    raw_comments = api_call_paginated(
+        f"/repos/{owner}/{repo}/pulls/{number}/comments", token)
 
     comments = []
     for c in raw_comments:
         comments.append({
+            "id": c.get("id"),
             "user": c.get("user", {}).get("login", ""),
             "path": c.get("path", ""),
             "line": c.get("original_line") or c.get("line"),
+            "diff_hunk": c.get("diff_hunk", ""),
+            "commit_id": (c.get("original_commit_id")
+                          or c.get("commit_id", "")),
             "body": (c.get("body") or "").strip(),
             "created_at": c.get("created_at", ""),
             "in_reply_to": c.get("in_reply_to_id"),
@@ -186,6 +192,108 @@ def format_review_feedback(reviews_data):
         lines.append("No actionable review feedback found.\n")
 
     return "\n".join(lines)
+
+
+# ─── V2: Diff Scope & Comment Filtering ──────────────────────────────────────
+
+def compute_diff_scope(pr_files):
+    """Parse PR changed files into a map of modified line numbers.
+
+    For each file, parses the unified diff patch to extract the exact
+    line numbers on the new side that were added or modified.
+
+    Args:
+        pr_files: list of file dicts from GitHub's GET /pulls/{n}/files.
+
+    Returns:
+        dict: {filepath: set(line_numbers)} for lines we changed.
+    """
+    scope = {}
+    for f in pr_files:
+        filename = f.get("filename", "")
+        patch = f.get("patch", "")
+        if not patch:
+            continue
+        lines = _parse_patch_lines(patch)
+        if lines:
+            scope[filename] = lines
+    return scope
+
+
+def _parse_patch_lines(patch_text):
+    """Parse unified diff to extract new-side line numbers."""
+    lines = set()
+    current_line = 0
+    for line in patch_text.split("\n"):
+        if line.startswith("@@"):
+            match = re.search(r'\+(\d+)', line)
+            if match:
+                current_line = int(match.group(1))
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            lines.add(current_line)
+            current_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            pass
+        else:
+            current_line += 1
+    return lines
+
+
+def is_comment_in_scope(comment, diff_scope):
+    """Check if a comment's file:line falls within our diff's changed lines."""
+    path = comment.get("path", "")
+    line = comment.get("line")
+    if not path or not line:
+        return False
+    if path not in diff_scope:
+        return False
+    return line in diff_scope[path]
+
+
+def filter_unprocessed_comments(comments, processed_ids, our_user):
+    """Filter to comments that haven't been processed yet.
+
+    Excludes:
+    - Comments from our own user
+    - Comments we've already replied to (by ID)
+    - Reply comments (in_reply_to set) — we process top-level only
+
+    Args:
+        comments: list of comment dicts from get_pr_reviews().
+        processed_ids: set of comment IDs already processed.
+        our_user: our bot username (e.g. "dora-the-ai-coder").
+
+    Returns:
+        list: unprocessed top-level comments from other users.
+    """
+    result = []
+    for c in comments:
+        if c.get("user") == our_user:
+            continue
+        if c.get("in_reply_to"):
+            continue
+        cid = c.get("id")
+        if cid and cid in processed_ids:
+            continue
+        result.append(c)
+    return result
+
+
+def load_processed_comment_ids(pr_replies_path):
+    """Load already-processed comment IDs from pr-replies.json.
+
+    Returns:
+        set: comment IDs that have been processed.
+    """
+    if not os.path.isfile(pr_replies_path):
+        return set()
+    try:
+        with open(pr_replies_path) as f:
+            data = json.load(f)
+        return {r["comment_id"] for r in data.get("replies", [])}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return set()
 
 
 def derive_pr_state(status):

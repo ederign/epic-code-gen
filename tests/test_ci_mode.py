@@ -230,10 +230,51 @@ class TestCIStateMachine:
         epic = _epic("E001")
         state = {"status": "PRChangesRequested",
                  "pr_url": "https://github.com/org/repo/pull/1",
-                 "current_version": 1, "max_iterations": 3}
+                 "current_version": 1, "max_iterations": 5}
         args = _args(tmp_path)
 
         action, from_s, to_s, detail = ci_process_epic(
             epic, state, args, "srv", "usr", "tok")
 
         assert action == SKIPPED
+
+    def test_pr_changes_exhausted_at_max_iterations(self, tmp_path,
+                                                     monkeypatch):
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "fake-token")
+
+        epic = _epic("E001")
+        state = {"status": "PRChangesRequested",
+                 "pr_url": "https://github.com/org/repo/pull/1",
+                 "current_version": 5, "max_iterations": 5}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == FAILED
+        assert to_s == "Failed"
+        assert "Exhausted" in detail
+
+    def test_init_state_has_max_iterations_5(self, tmp_path):
+        """V2: default max_iterations should be 5."""
+        epic = _epic("E001")
+        args = _args(tmp_path)
+
+        ci_process_epic(epic, None, args, "srv", "usr", "tok")
+
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["max_iterations"] == 5
+
+    def test_pr_changes_skips_without_pr_url(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "fake-token")
+
+        epic = _epic("E001")
+        state = {"status": "PRChangesRequested",
+                 "current_version": 1, "max_iterations": 5}
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert "No PR URL" in detail
