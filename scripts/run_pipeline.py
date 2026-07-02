@@ -1187,8 +1187,8 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
             transition_issue(server, user, token, epic_id, "Done")
             return PROCESSED, "PRCreated", "Done", "PR merged"
         elif new_state == "PRChangesRequested":
-            return PROCESSED, "PRCreated", "PRChangesRequested", \
-                "Unprocessed review comments found"
+            return _ci_handle_pr_changes(
+                epic, state, args, server, user, token)
         elif new_state == "Ready":
             return PROCESSED, "PRCreated", "Ready", "PR closed, will retry"
         return SKIPPED, "PRCreated", new_state, f"State → {new_state}"
