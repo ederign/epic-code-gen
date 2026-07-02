@@ -316,7 +316,7 @@ def main():
                 args.epic_id,
                 dest=args.dest,
                 fork_owner=args.fork_owner,
-                clean=False,
+                clean=args.clean,
                 gh_token_var=args.gh_token_var,
             )
             branch = f"epic/{args.epic_id}"

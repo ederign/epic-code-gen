@@ -1308,7 +1308,7 @@ def _setup_target_for_review_response(epic, state, args, target_repo):
         os.path.dirname(os.path.abspath(__file__)), "clone_target.py")
     cmd = [
         sys.executable, clone_script, target_url, epic_id,
-        "--dest", target_repo, "--checkout-existing",
+        "--dest", target_repo, "--checkout-existing", "--clean",
     ]
     fork_owner = getattr(args, "fork_owner", None)
     if fork_owner:
