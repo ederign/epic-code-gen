@@ -312,8 +312,14 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
     screenshots_base = screenshots_dir or os.path.join(output_dir, "screenshots")
 
     rfe_summary = sections.get("Summary", "")
-    customers = sections.get("Affected Customers", "")
-    biz_justification = sections.get("Business Justification", "")
+    customers_raw = sections.get("Affected Customers", "")
+    customers = re.sub(
+        r'\*\*[A-Z][A-Za-z\s&\.\'-]+\*\*(?=\s+and other)',
+        '**[Customer]**',
+        customers_raw,
+    )
+    customers = customers.replace("wx.ai", "[partner product]")
+    biz_justification = sections.get("Business Justification", "").replace("wx.ai", "[partner product]")
     acceptance = sections.get("Acceptance Criteria", "")
     staff_engineer = sections.get("Staff Engineer / SME Input", "")
     staff_engineer_tags = ""
