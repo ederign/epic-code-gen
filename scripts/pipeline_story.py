@@ -252,6 +252,15 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
     summary_json = read_json(os.path.join(data_dir, "strategy-summary.json"))
     run_log_text = read_file(os.path.join(data_dir, "run-log.jsonl"))
 
+    run_log_entries = []
+    for line in run_log_text.strip().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                run_log_entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
     sections = parse_strategy_sections(strategy_md)
     title = extract_title(strategy_md)
     tldr = extract_tldr(sections)
@@ -264,7 +273,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             epic_with_pr = ep
             break
 
-    # Load epic titles, dependencies, and blocks from jira-epics.json or epic-task.md
+    # Load epic titles, dependencies, and blocks
     epic_titles = {}
     epic_deps = {}
     epic_blocks = {}
@@ -279,9 +288,24 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
         for ep in epics:
             eid = ep["epic_id"]
             task_md = read_file(os.path.join(data_dir, eid, "epic-task.md"))
+            meta_yaml = read_file(os.path.join(data_dir, eid, "run-metadata.yaml"))
             for line in task_md.splitlines():
                 if line.startswith("title:"):
                     epic_titles[eid] = line.split(":", 1)[1].strip()
+            blocked_by = []
+            in_blocked = False
+            for line in meta_yaml.splitlines():
+                if line.startswith("blocked_by:"):
+                    in_blocked = True
+                    continue
+                if in_blocked:
+                    if line.startswith("- "):
+                        blocked_by.append(line.strip().lstrip("- "))
+                    else:
+                        in_blocked = False
+            epic_deps[eid] = blocked_by
+            for dep in blocked_by:
+                epic_blocks.setdefault(dep, []).append(eid)
 
     all_epic_data = {}
     for ep in epics:
@@ -540,211 +564,242 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
         pr_url = epic_with_pr.get("pr_url", "")
     epic_id_display = epic_with_pr["epic_id"] if epic_with_pr else "N/A"
 
-    def build_epic_timeline_block(ep, idx):
-        """Build a collapsible timeline block for one epic."""
-        eid = ep["epic_id"]
-        edata = all_epic_data.get(eid, {})
-        status = ep.get("status", "Unknown")
-        repo = ep.get("target_repo", "")
-        ep_title = epic_titles.get(eid, "")
-        ep_pr_url = ep.get("pr_url", "") or ""
-        blocked_by = []
-        for line in edata.get("metadata", "").splitlines():
-            if line.strip().startswith("- RHOAIENG-") or line.strip().startswith("- RHAISTRAT-"):
-                blocked_by.append(line.strip().lstrip("- "))
+    # Build per-run timeline from run-log.jsonl
+    epic_summary_by_id = {ep["epic_id"]: ep for ep in epics}
 
-        if not edata.get("has_artifacts"):
-            blockers_text = ", ".join(
-                f'<span class="font-mono text-blue-400">{escape(b)}</span>'
-                for b in blocked_by
-            ) if blocked_by else "upstream epics"
-            return f"""
-        <div class="bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden">
-          <div class="flex items-center gap-3 px-5 py-4">
-            <div class="w-8 h-8 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center">
-              <span class="text-xs font-bold text-slate-400">{idx + 1}</span>
-            </div>
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="font-mono text-sm font-bold text-slate-400">{escape(eid)}</span>
-                <span class="px-2 py-0.5 rounded text-xs font-semibold bg-red-500/20 text-red-400">{escape(status)}</span>
-              </div>
-              <p class="text-sm text-slate-500 mt-0.5">{escape(ep_title)}</p>
-            </div>
-            <span class="text-xs text-slate-600 font-mono">{escape(repo)}</span>
-          </div>
-          <div class="px-5 pb-4">
-            <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-4 flex items-center gap-3">
-              <svg class="w-5 h-5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-              </svg>
-              <p class="text-sm text-slate-400">Waiting for {blockers_text} to complete before the agent loop can start on this epic.</p>
-            </div>
-          </div>
-        </div>"""
+    STATUS_LABELS = {
+        "PRCreated": "PR Opened",
+        "ReviewPending": "Code Generated",
+        "Blocked": "Blocked",
+        "Done": "Done",
+        "InProgress": "In Progress",
+        "Failed": "Failed",
+    }
 
-        e_scores = edata.get("v1_scores", {})
-        e_dims = e_scores.get("dimensions", {})
-        e_weighted = e_scores.get("weighted_average", 0)
-        e_verdict = e_scores.get("verdict", "")
-        e_pr_replies = edata.get("pr_replies", {}).get("replies", [])
+    def friendly_status(raw):
+        return STATUS_LABELS.get(raw, raw)
 
-        e_score_bars = ""
-        for dim_name, dim_data in e_dims.items():
-            sv = dim_data.get("score", 0)
-            w = dim_data.get("weight", 0)
-            pct = sv * 10
-            c = "bg-emerald-500" if sv >= 8 else ("bg-amber-500" if sv >= 6 else "bg-red-500")
-            e_score_bars += f"""
-            <div class="flex items-center gap-3 mb-2">
-              <span class="w-24 text-sm font-medium text-slate-300 capitalize">{escape(dim_name)}</span>
-              <span class="w-10 text-xs text-slate-500 text-right">{int(w*100)}%</span>
-              <div class="flex-1 h-5 bg-slate-700 rounded-full overflow-hidden">
-                <div class="{c} h-full rounded-full transition-all duration-1000" style="width: {pct}%"></div>
-              </div>
-              <span class="w-12 text-sm font-bold text-slate-200 text-right">{sv}/10</span>
-            </div>"""
+    def build_run_timeline_blocks():
+        """Build collapsible timeline blocks grouped by pipeline run."""
+        if not run_log_entries:
+            return '<p class="text-slate-500 italic text-sm">No pipeline runs recorded yet.</p>'
 
-        e_pr_convo = ""
-        if e_pr_replies:
-            for reply in e_pr_replies:
-                user = reply.get("user", "Unknown")
-                body = reply.get("reply_body", "")
-                action = reply.get("action", "")
-                ts = reply.get("timestamp", "")
-                e_pr_convo += f"""
-                <div class="flex gap-3 mb-3">
-                  <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
-                    {escape(user[0:2])}
-                  </div>
-                  <div class="flex-1 bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
-                    <div class="flex items-center gap-2 mb-1">
-                      <span class="text-sm font-semibold text-slate-300">{escape(user)}</span>
-                      <span class="px-1.5 py-0.5 rounded text-xs bg-amber-500/20 text-amber-400">{escape(action)}</span>
-                      <span class="text-xs text-slate-500">{escape(ts)}</span>
-                    </div>
-                    <p class="text-sm text-slate-400">{escape(body)}</p>
-                  </div>
-                </div>"""
+        blocks = ""
+        for run_idx, run in enumerate(run_log_entries):
+            ts_raw = run.get("timestamp", "")
+            ts_display = ts_raw[:19].replace("T", " ") + " UTC" if ts_raw else "Unknown"
+            actions = run.get("actions", [])
+            processed = run.get("epics_processed", 0)
+            blocked = run.get("epics_blocked", 0)
 
-        e_diff_html = diff_to_html(edata.get("v1_diff", ""))
-        pr_num = ep_pr_url.split("/")[-1] if ep_pr_url else ""
+            processed_actions = [a for a in actions if a.get("to") not in ("Blocked",)]
+            blocked_epics = [
+                eid for eid, ep in epic_summary_by_id.items()
+                if ep.get("status") == "Blocked"
+            ]
 
-        verdict_class = "bg-emerald-500/20 text-emerald-400" if e_verdict == "pass" else "bg-red-500/20 text-red-400"
+            is_open = "open" if run_idx == len(run_log_entries) - 1 else ""
 
-        status_class = "bg-blue-500/20 text-blue-400" if status == "PRCreated" else "bg-emerald-500/20 text-emerald-400"
-        is_open = "open" if idx == 0 else ""
+            run_content = ""
+            for action in processed_actions:
+                eid = action.get("epic", "")
+                from_state = action.get("from", "")
+                to_state = action.get("to", "")
+                version = action.get("version", 1)
+                ep_info = epic_summary_by_id.get(eid, {})
+                edata = all_epic_data.get(eid, {})
+                ep_title = epic_titles.get(eid, "")
+                repo = ep_info.get("target_repo", "")
+                ep_pr_url = ep_info.get("pr_url", "") or ""
+                pr_num = ep_pr_url.split("/")[-1] if ep_pr_url else ""
 
-        pr_button = ""
-        if ep_pr_url:
-            pr_button = f'<a href="{escape(ep_pr_url)}" target="_blank" class="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>View PR on GitHub</a>'
+                e_scores = edata.get("v1_scores", {})
+                e_dims = e_scores.get("dimensions", {})
+                e_weighted = e_scores.get("weighted_average", 0)
+                e_verdict = e_scores.get("verdict", "")
 
-        return f"""
-        <details class="bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden" {is_open}>
-          <summary class="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-slate-800/50 transition-colors">
-            <div class="w-8 h-8 rounded-full bg-emerald-900 border-2 border-emerald-500 flex items-center justify-center">
-              <span class="text-xs font-bold text-emerald-400">{idx + 1}</span>
-            </div>
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="font-mono text-sm font-bold text-blue-400">{escape(eid)}</span>
-                <span class="px-2 py-0.5 rounded text-xs font-semibold {status_class}">{escape(status)}</span>
-              </div>
-              <p class="text-sm text-slate-400 mt-0.5">{escape(ep_title)}</p>
-            </div>
-            <span class="text-xs text-slate-600 font-mono">{escape(repo)}</span>
-            <svg class="w-5 h-5 text-slate-500 shrink-0 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-          </summary>
-          <div class="px-5 pb-5">
-            <div class="relative ml-4 border-l-2 border-slate-700 pl-8 space-y-6 mt-2">
-              <!-- v1 -->
-              <div class="relative">
-                <div class="absolute -left-[41px] w-6 h-6 rounded-full bg-emerald-900 border-2 border-emerald-500 flex items-center justify-center">
-                  <span class="text-[10px] font-bold text-emerald-400">1</span>
+                e_score_bars = ""
+                for dim_name, dim_data in e_dims.items():
+                    sv = dim_data.get("score", 0)
+                    w = dim_data.get("weight", 0)
+                    pct = sv * 10
+                    c = "bg-emerald-500" if sv >= 8 else ("bg-amber-500" if sv >= 6 else "bg-red-500")
+                    e_score_bars += f"""
+                    <div class="flex items-center gap-3 mb-2">
+                      <span class="w-24 text-sm font-medium text-slate-300 capitalize">{escape(dim_name)}</span>
+                      <span class="w-10 text-xs text-slate-500 text-right">{int(w*100)}%</span>
+                      <div class="flex-1 h-5 bg-slate-700 rounded-full overflow-hidden">
+                        <div class="{c} h-full rounded-full transition-all duration-1000" style="width: {pct}%"></div>
+                      </div>
+                      <span class="w-12 text-sm font-bold text-slate-200 text-right">{sv}/10</span>
+                    </div>"""
+
+                verdict_class = "bg-emerald-500/20 text-emerald-400" if e_verdict == "pass" else "bg-red-500/20 text-red-400"
+                e_diff_html = diff_to_html(edata.get("v1_diff", ""))
+
+                pr_button = ""
+                if ep_pr_url:
+                    pr_button = f'<a href="{escape(ep_pr_url)}" target="_blank" class="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>View PR on GitHub</a>'
+
+                run_content += f"""
+              <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4 mb-3">
+                <div class="flex items-center gap-2 mb-3">
+                  <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
+                     class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-400">{escape(friendly_status(to_state))}</span>
+                  <span class="text-xs text-slate-500">v{version}</span>
                 </div>
-                <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4">
-                  <div class="flex items-center gap-2 mb-3">
-                    <h5 class="text-sm font-bold text-white">Iteration 1</h5>
-                    <span class="px-2 py-0.5 rounded text-xs font-semibold {verdict_class}">{escape(e_verdict.upper()) if e_verdict else 'N/A'}</span>
-                    <span class="text-xs text-slate-500">Spec &rarr; Plan &rarr; Code &rarr; N Review</span>
-                  </div>
+                <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
+                <p class="text-xs text-slate-500 font-mono mb-3">{escape(repo)}</p>
+
+                {f"""
+                <div class="border-t border-slate-700 pt-3 mt-2">
+                  <h6 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Review Scores</h6>
                   {e_score_bars}
-                  <div class="mt-3 pt-3 border-t border-slate-700 flex items-center justify-between">
+                  <div class="mt-2 pt-2 border-t border-slate-700 flex items-center justify-between">
                     <span class="text-sm font-medium text-slate-400">Weighted Average</span>
                     <div class="flex items-center gap-2">
-                      <span class="text-2xl font-bold text-emerald-400">{e_weighted}</span>
+                      <span class="text-xl font-bold text-emerald-400">{e_weighted}</span>
                       <span class="text-sm text-slate-500">/ 10</span>
                       <span class="px-2 py-0.5 rounded text-xs font-semibold {verdict_class}">{escape(e_verdict.upper()) if e_verdict else 'N/A'}</span>
                     </div>
                   </div>
-                  <details class="mt-4">
-                    <summary class="cursor-pointer text-sm font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-2">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-                      View generated diff
-                    </summary>
-                    <div class="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[400px] overflow-y-auto">
-                      {e_diff_html}
-                    </div>
-                  </details>
-                  <p class="mt-3 text-sm text-emerald-400 font-semibold">&rarr; PR #{escape(pr_num)} opened</p>
                 </div>
-              </div>
+                """ if e_dims else ""}
 
-              {"" if not e_pr_replies else f'''
-              <!-- PR Review -->
-              <div class="relative">
-                <div class="absolute -left-[41px] w-6 h-6 rounded-full bg-purple-900 border-2 border-purple-500 flex items-center justify-center">
-                  <svg class="w-3 h-3 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-                </div>
-                <div class="bg-slate-800/50 border border-purple-700/30 rounded-lg p-4">
-                  <div class="flex items-center gap-2 mb-3">
-                    <h5 class="text-sm font-bold text-white">PR Review</h5>
-                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-400">CHANGES REQUESTED</span>
+                {f"""
+                <details class="mt-3">
+                  <summary class="cursor-pointer text-sm font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                    View generated diff
+                  </summary>
+                  <div class="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[400px] overflow-y-auto">
+                    {e_diff_html}
                   </div>
-                  {e_pr_convo}
-                  <p class="mt-2 text-sm text-amber-400 font-semibold flex items-center gap-1.5">
-                    <svg class="w-4 h-4 loop-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                </details>
+                """ if e_diff_html.strip() else ""}
+
+                {f'<p class="mt-3 text-sm text-emerald-400 font-semibold">&rarr; Code v{version} <span class="text-slate-500 font-normal">(full epic code gen loop: spec &rarr; code &rarr; review &rarr; score)</span> &mdash; PR #{escape(pr_num)} opened</p>' if pr_num else ""}
+                {pr_button}
+              </div>"""
+
+            if blocked_epics:
+                run_content += """
+              <div class="mt-2">
+                <h6 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                  </svg>
+                  Blocked Epics
+                </h6>
+                <div class="grid gap-2">"""
+                for beid in blocked_epics:
+                    btitle = epic_titles.get(beid, "")
+                    brepo = epic_summary_by_id.get(beid, {}).get("target_repo", "")
+                    blockers = epic_deps.get(beid, [])
+                    blockers_text = ", ".join(
+                        f'<span class="font-mono text-blue-400">{escape(b)}</span>'
+                        for b in blockers
+                    ) if blockers else "upstream epics"
+                    run_content += f"""
+                  <div class="bg-slate-800/30 border border-slate-700/30 rounded-lg p-3 flex items-center gap-3">
+                    <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
                     </svg>
-                    Loop back &mdash; fix needed
-                  </p>
+                    <div class="flex-1">
+                      <div class="flex items-center gap-2">
+                        <a href="https://redhat.atlassian.net/browse/{escape(beid)}" target="_blank"
+                           class="font-mono text-xs font-bold text-slate-400 hover:text-blue-300">{escape(beid)}</a>
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-400">BLOCKED</span>
+                      </div>
+                      <p class="text-xs text-slate-500 mt-0.5">{escape(btitle)}</p>
+                    </div>
+                    <div class="text-right">
+                      <p class="text-[10px] text-slate-600">blocked by {blockers_text}</p>
+                      <p class="text-[10px] text-slate-600 font-mono">{escape(brepo)}</p>
+                    </div>
+                  </div>"""
+                run_content += """
                 </div>
-              </div>
+              </div>"""
 
-              <!-- v2 -->
-              <div class="relative">
-                <div class="absolute -left-[41px] w-6 h-6 rounded-full bg-blue-900 border-2 border-blue-500 flex items-center justify-center">
-                  <span class="text-[10px] font-bold text-blue-400">2</span>
-                </div>
-                <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4">
-                  <div class="flex items-center gap-2 mb-3">
-                    <h5 class="text-sm font-bold text-white">Iteration 2</h5>
-                    <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-400">FIX APPLIED</span>
-                  </div>
-                  <p class="text-sm text-slate-400 mb-2">Agent addressed review feedback and pushed a fix.</p>
-                  <p class="mt-3 text-sm text-emerald-400 font-semibold">&rarr; PR updated</p>
-                </div>
+            blocks += f"""
+        <details class="bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden" {is_open}>
+          <summary class="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-slate-800/50 transition-colors">
+            <div class="w-10 h-10 rounded-full bg-blue-900 border-2 border-blue-500 flex items-center justify-center">
+              <span class="text-sm font-bold text-blue-400">{run_idx + 1}</span>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-bold text-white">Agentic Pipeline Loop {run_idx + 1}</span>
+                <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-400">{processed} processed</span>
+                {"" if not blocked else f'<span class="px-2 py-0.5 rounded text-xs font-semibold bg-red-500/20 text-red-400">{blocked} blocked</span>'}
               </div>
-              '''}
+              <p class="text-xs text-slate-500 mt-0.5">{escape(ts_display)}</p>
+            </div>
+            <svg class="w-5 h-5 text-slate-500 shrink-0 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-5 pb-5 pt-2">
+            {run_content}
+          </div>
+        </details>"""
 
-              <!-- Status -->
-              <div class="relative">
-                <div class="absolute -left-[41px] w-6 h-6 rounded-full bg-amber-900 border-2 border-amber-500 flex items-center justify-center">
-                  <svg class="w-3 h-3 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-                <div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4">
-                  <h5 class="text-sm font-bold text-white mb-2">{"Awaiting Merge" if status == "PRCreated" else "Complete"}</h5>
-                  <p class="text-sm text-slate-400">{"PR is ready for final human approval. Once merged, dependent epics automatically unblock." if status == "PRCreated" else "Epic completed and merged."}</p>
-                  {pr_button}
-                </div>
+            has_prs = any(
+                a.get("to") == "PRCreated" for a in actions
+            )
+            is_last_run = run_idx == len(run_log_entries) - 1
+            if has_prs and is_last_run:
+                review_screenshot = ""
+                screenshot_path = os.path.join(
+                    screenshots_base, "copilot-review.png"
+                )
+                if os.path.exists(screenshot_path):
+                    rel = os.path.relpath(screenshot_path, output_dir)
+                    review_screenshot = f'<div class="flex justify-center mt-3"><img src="{escape(rel)}" alt="AI agent reviewing the PR" class="rounded-lg border border-purple-700/30 max-w-[50%]" /></div>'
+
+                pr_epic_ids = [
+                    a.get("epic", "") for a in actions
+                    if a.get("to") == "PRCreated"
+                ]
+                pr_links = ""
+                for peid in pr_epic_ids:
+                    purl = epic_summary_by_id.get(peid, {}).get("pr_url", "")
+                    if purl:
+                        pr_links += f' <a href="{escape(purl)}" target="_blank" class="font-mono text-xs text-purple-400 hover:text-purple-300">{escape(peid)}</a>'
+
+                blocks += f"""
+        <details class="bg-purple-900/10 border border-purple-700/30 rounded-xl my-3 border-dashed overflow-hidden" open>
+          <summary class="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-purple-900/20 transition-colors">
+            <div class="w-10 h-10 rounded-full bg-purple-900/50 border-2 border-purple-500/50 flex items-center justify-center">
+              <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-bold text-purple-300">External Review</span>
+                <span class="px-2 py-0.5 rounded text-xs font-semibold bg-purple-500/20 text-purple-400">OUTER LOOP</span>
               </div>
+              <p class="text-xs text-slate-500 mt-0.5">AI agents and humans review PRs outside the pipeline — feedback is picked up on the next loop</p>
+            </div>
+            <svg class="w-5 h-5 text-slate-500 shrink-0 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-5 pb-5">
+            <div class="bg-slate-900/50 border border-purple-700/20 rounded-lg p-4">
+              <p class="text-sm text-slate-400 mb-2">Open PRs from Loop {run_idx + 1} are being reviewed by external AI agents (<span class="text-purple-300 font-semibold">GitHub Copilot</span>, <span class="text-purple-300 font-semibold">CodeRabbit</span>) and human engineers.{pr_links}</p>
+              {review_screenshot}
+              <p class="text-xs text-slate-500 mt-3 italic">The pipeline will pick up review feedback and act on it in the next agentic loop.</p>
             </div>
           </div>
         </details>"""
 
-    epic_timeline_blocks = "\n".join(
-        build_epic_timeline_block(ep, i) for i, ep in enumerate(epics)
-    )
+        return blocks
+
+    epic_timeline_blocks = build_run_timeline_blocks()
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -1314,21 +1369,17 @@ tailwind.config = {{
         </div>
       </div>
 
-      <!-- ── Per-Epic Timelines ── -->
+      <!-- ── Pipeline Run Timeline ── -->
       <div>
         <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
           <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
-          Per-Epic Progress
+          Agentic Pipeline Loops
         </h4>
 
         <div class="space-y-3">
           {epic_timeline_blocks}
-        </div>
-
-        <div class="mt-6">
-          {screenshot_slot("pr-review", "Screenshot: GitHub PR Review")}
         </div>
       </div>
 
