@@ -666,7 +666,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                   <div class="flex items-center gap-2 mb-3">
                     <h5 class="text-sm font-bold text-white">Iteration 1</h5>
                     <span class="px-2 py-0.5 rounded text-xs font-semibold {verdict_class}">{escape(e_verdict.upper()) if e_verdict else 'N/A'}</span>
-                    <span class="text-xs text-slate-500">Spec &rarr; Plan &rarr; Code &rarr; 4D Review</span>
+                    <span class="text-xs text-slate-500">Spec &rarr; Plan &rarr; Code &rarr; N Review</span>
                   </div>
                   {e_score_bars}
                   <div class="mt-3 pt-3 border-t border-slate-700 flex items-center justify-between">
@@ -1237,53 +1237,80 @@ tailwind.config = {{
         </h4>
 
         <!-- Loop flow visualization -->
-        <div class="bg-slate-800/30 border border-slate-700/50 rounded-xl p-5">
-          <div class="flex items-center gap-2 flex-wrap justify-center">
-            <div class="shrink-0 bg-blue-900/30 border border-blue-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-blue-400">Spec &amp; Plan</p>
+        <div class="flex items-start gap-4">
+
+          <!-- Box 1: Generation -->
+          <div class="flex-1 bg-slate-800/30 border border-slate-700/50 rounded-xl p-4">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Generation <span class="text-slate-600">(Inner Loop)</span></p>
+            <div class="flex items-center gap-2 flex-wrap justify-center">
+              <div class="shrink-0 bg-blue-900/30 border border-blue-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-blue-400">Spec</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-emerald-400">Code</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <div class="shrink-0 bg-purple-900/30 border border-purple-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-purple-400">N Review</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <div class="shrink-0 bg-amber-900/30 border border-amber-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-amber-400">Score</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-emerald-400">PR</p>
+              </div>
             </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-emerald-400">Code</p>
-            </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-purple-900/30 border border-purple-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-purple-400">4D Review</p>
-            </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-amber-900/30 border border-amber-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-amber-400">Score</p>
-            </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-emerald-400">PR</p>
-            </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-blue-900/30 border border-blue-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-blue-400">Review</p>
-              <p class="text-[10px] text-slate-500">Human + Agent</p>
-            </div>
-            <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
-              <p class="text-xs font-semibold text-emerald-400">Merge</p>
+            <div class="flex justify-center mt-3">
+              <div class="flex items-center gap-1.5 text-red-400">
+                <svg class="w-4 h-4 loop-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                </svg>
+                <span class="text-[11px] font-semibold">Score &lt; 8.0 &rarr; iterate</span>
+              </div>
             </div>
           </div>
 
-          <!-- Loop-back arrows -->
-          <div class="flex justify-center gap-12 mt-3">
-            <div class="flex items-center gap-1.5 text-red-400">
-              <svg class="w-4 h-4 loop-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
-              </svg>
-              <span class="text-[11px] font-semibold">Score &lt; 8.0 &rarr; iterate code</span>
+          <svg class="w-6 h-6 text-slate-600 shrink-0 self-center" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+
+          <!-- Box 2: Review Loop -->
+          <div class="flex-1 bg-slate-800/30 border border-amber-700/30 rounded-xl p-4">
+            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Review Loop <span class="text-slate-600">(Outer Loop)</span></p>
+            <div class="flex items-center gap-2 flex-wrap justify-center">
+              <div class="shrink-0 bg-blue-900/30 border border-blue-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-blue-400">PR Review</p>
+                <p class="text-[10px] text-slate-500">Human + Agent</p>
+              </div>
+              <svg class="w-4 h-4 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <div class="shrink-0 bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
+                <p class="text-xs font-semibold text-emerald-400">Code Fix</p>
+              </div>
             </div>
-            <div class="flex items-center gap-1.5 text-amber-400">
-              <svg class="w-4 h-4 loop-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
-              </svg>
-              <span class="text-[11px] font-semibold">Changes requested &rarr; fix &amp; push</span>
+            <div class="flex justify-center mt-3">
+              <div class="flex items-center gap-1.5 text-amber-400">
+                <svg class="w-4 h-4 loop-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                </svg>
+                <span class="text-[11px] font-semibold">Changes requested &rarr; fix &amp; push</span>
+              </div>
             </div>
           </div>
+
+          <svg class="w-6 h-6 text-slate-600 shrink-0 self-center" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+
+          <!-- Box 3: Done -->
+          <div class="shrink-0 flex flex-col items-center gap-2 self-center">
+            <div class="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
+              <p class="text-xs font-semibold text-emerald-400">Merge PR</p>
+            </div>
+            <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/></svg>
+            <div class="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-3 py-2 text-center">
+              <p class="text-xs font-semibold text-emerald-400">Close Epic</p>
+            </div>
+          </div>
+
         </div>
       </div>
 
