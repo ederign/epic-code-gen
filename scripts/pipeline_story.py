@@ -264,17 +264,24 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             epic_with_pr = ep
             break
 
-    # Load epic-task frontmatter for titles and dependency info
+    # Load epic titles, dependencies, and blocks from jira-epics.json or epic-task.md
     epic_titles = {}
+    epic_deps = {}
     epic_blocks = {}
-    for ep in epics:
-        eid = ep["epic_id"]
-        task_md = read_file(os.path.join(data_dir, eid, "epic-task.md"))
-        for line in task_md.splitlines():
-            if line.startswith("title:"):
-                epic_titles[eid] = line.split(":", 1)[1].strip()
-            if line.startswith("- RHOAIENG-") or line.startswith("- RHAISTRAT-"):
-                epic_blocks.setdefault(eid, []).append(line.strip().lstrip("- "))
+    jira_epics = read_json(os.path.join(data_dir, "jira-epics.json"))
+    if isinstance(jira_epics, list) and jira_epics:
+        for je in jira_epics:
+            eid = je["epic_id"]
+            epic_titles[eid] = je.get("title", "")
+            epic_deps[eid] = je.get("dependencies") or []
+            epic_blocks[eid] = je.get("blocks") or []
+    else:
+        for ep in epics:
+            eid = ep["epic_id"]
+            task_md = read_file(os.path.join(data_dir, eid, "epic-task.md"))
+            for line in task_md.splitlines():
+                if line.startswith("title:"):
+                    epic_titles[eid] = line.split(":", 1)[1].strip()
 
     all_epic_data = {}
     for ep in epics:
@@ -356,16 +363,14 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
     pr_replies = epic_data.get("pr_replies", {}).get("replies", [])
 
-    # Build HTML dependency graph nodes
-    dep_graph_nodes = ""
-    epic_ids = [ep["epic_id"] for ep in epics]
-    for i, ep in enumerate(epics):
-        eid = ep["epic_id"]
-        short_id = eid.split("-")[-1]
-        status = ep.get("status", "")
-        ep_title = epic_titles.get(eid, "")
-        short_title = ep_title[:25] + "..." if len(ep_title) > 25 else ep_title
+    # Build vertical DAG HTML
+    epic_status_map = {ep["epic_id"]: ep.get("status", "") for ep in epics}
 
+    def dag_node_html(eid):
+        status = epic_status_map.get(eid, "")
+        short_id = eid.split("-")[-1]
+        ep_title = epic_titles.get(eid, "")
+        short_title = ep_title[:30] + "..." if len(ep_title) > 30 else ep_title
         if status == "PRCreated":
             node_bg = "bg-blue-900/40 border-blue-600/60"
             node_text = "text-blue-300"
@@ -381,26 +386,60 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             node_text = "text-red-300"
             dot_color = "bg-red-500"
             status_label = "Blocked"
-
-        arrow = ""
-        if i < len(epics) - 1:
-            arrow = """
-            <svg class="w-6 h-6 text-slate-600 shrink-0 mx-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-            </svg>"""
-
-        dep_graph_nodes += f"""
-        <div class="flex items-center gap-0 shrink-0">
-          <div class="arch-node {node_bg} border rounded-lg px-4 py-3 text-center min-w-[140px]">
+        return f"""<div class="arch-node {node_bg} border rounded-lg px-4 py-3 text-center min-w-[160px]">
             <p class="font-mono text-xs font-bold {node_text}">{escape(short_id)}</p>
             <p class="text-[10px] text-slate-400 mt-1 leading-tight">{escape(short_title)}</p>
             <div class="flex items-center justify-center gap-1.5 mt-2">
               <span class="w-1.5 h-1.5 rounded-full {dot_color}"></span>
               <span class="text-[10px] text-slate-500">{escape(status_label)}</span>
             </div>
-          </div>
-          {arrow}
-        </div>"""
+          </div>"""
+
+    down_arrow = """<div class="flex justify-center py-1">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/>
+        </svg>
+      </div>"""
+
+    fork_connector = """<div class="flex justify-center py-1">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/>
+        </svg>
+      </div>"""
+
+    # Build DAG by topological layers
+    roots = [eid for eid in [ep["epic_id"] for ep in epics] if not epic_deps.get(eid)]
+    visited = set()
+    layers = []
+
+    def build_layers(current_layer):
+        if not current_layer:
+            return
+        layers.append(current_layer)
+        visited.update(current_layer)
+        next_layer = []
+        for eid in current_layer:
+            for child in epic_blocks.get(eid, []):
+                if child not in visited and child in epic_status_map:
+                    all_deps_visited = all(d in visited for d in epic_deps.get(child, []))
+                    if all_deps_visited and child not in next_layer:
+                        next_layer.append(child)
+        build_layers(next_layer)
+
+    build_layers(roots)
+
+    dep_graph_dag = '<div class="flex flex-col items-center gap-0">'
+    for li, layer in enumerate(layers):
+        if li > 0:
+            dep_graph_dag += fork_connector
+        if len(layer) == 1:
+            dep_graph_dag += dag_node_html(layer[0])
+        else:
+            dep_graph_dag += '<div class="flex items-start gap-6 justify-center">'
+            for eid in layer:
+                dep_graph_dag += dag_node_html(eid)
+            dep_graph_dag += '</div>'
+    dep_graph_dag += '</div>'
 
     # Build score bars HTML
     score_bars = ""
@@ -1137,15 +1176,13 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-purple-500/20 text-purple-400 text-xs font-semibold uppercase">Stage 3</span>
         <h3 class="text-xl font-bold text-white">Epic Decomposition</h3>
       </div>
-      <p class="text-slate-400 mb-4">AI breaks the strategy into ordered engineering tasks (epics) with a dependency graph. Tasks are processed in topological order &mdash; blocked work waits for upstream.</p>
+      <p class="text-slate-400 mb-4">AI breaks the strategy into ordered engineering tasks (epics) with a dependency graph. Tasks are processed in topological order &mdash; blocked work waits for upstream. When a strategy requires investigation before epic breakdown, the pipeline creates a <strong class="text-white">research spike</strong> to gather the needed context first.</p>
 
       <div class="grid md:grid-cols-2 gap-6">
         <div>
-          <h4 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Dependency Chain</h4>
-          <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4 overflow-x-auto">
-            <div class="flex items-center gap-0 min-w-fit py-2">
-              {dep_graph_nodes}
-            </div>
+          <h4 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Dependency Graph</h4>
+          <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4">
+            {dep_graph_dag}
           </div>
         </div>
         <div>
@@ -1154,10 +1191,6 @@ tailwind.config = {{
             {epic_cards_html}
           </div>
         </div>
-      </div>
-
-      <div class="mt-6">
-        {screenshot_slot("epics", "Screenshot: Jira Epic Board")}
       </div>
     </div>
   </div>
@@ -1183,8 +1216,8 @@ tailwind.config = {{
           </svg>
           Epic Queue ({len(epics)} epics)
         </h4>
-        <div class="flex items-center gap-2 overflow-x-auto pb-2">
-          {dep_graph_nodes}
+        <div class="pb-2">
+          {dep_graph_dag}
         </div>
       </div>
 
