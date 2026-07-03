@@ -386,7 +386,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
         img_path = os.path.join(screenshots_base, f"{name}.png")
         if os.path.exists(img_path):
             rel = os.path.relpath(img_path, output_dir)
-            return f'<img src="{escape(rel)}" alt="{escape(label)}" class="rounded-lg border border-slate-700 w-full" />'
+            return f'<img src="{escape(rel)}" alt="{escape(label)}" class="rounded-lg border border-slate-700 max-w-[50%]" />'
         return f"""
         <div class="border-2 border-dashed border-slate-600 rounded-lg p-8 text-center">
           <svg class="w-12 h-12 mx-auto mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -752,9 +752,18 @@ tailwind.config = {{
       <span class="pipeline-arrow self-center">&rsaquo;</span>
 
       <!-- RFE Creator -->
-      <div class="flex items-center">
-        <div class="arch-node bg-emerald-900/40 border border-emerald-700/60 rounded-lg px-4 py-3 text-center min-w-[120px]">
-          <p class="font-semibold text-emerald-300 text-sm">RFE Creator</p>
+      <div class="border-2 border-emerald-700/60 bg-emerald-900/20 rounded-xl p-4 flex flex-col gap-2 self-center min-w-[160px]">
+        <p class="font-bold text-emerald-300 text-sm text-center mb-1">RFE Creator</p>
+        <div class="flex flex-col gap-2">
+          <div class="arch-node bg-emerald-900/40 border border-emerald-700/60 rounded-lg px-2 py-1.5 text-center">
+            <p class="font-medium text-emerald-300 text-[10px]">Assess RFE</p>
+          </div>
+          <div class="arch-node bg-emerald-900/40 border border-emerald-700/60 rounded-lg px-2 py-1.5 text-center">
+            <p class="font-medium text-emerald-300 text-[10px]">RFE Splitter</p>
+          </div>
+          <div class="arch-node bg-emerald-900/40 border border-emerald-700/60 rounded-lg px-2 py-1.5 text-center">
+            <p class="font-medium text-emerald-300 text-[10px]">RFE Auto-Fix</p>
+          </div>
         </div>
       </div>
 
@@ -763,7 +772,7 @@ tailwind.config = {{
       <!-- Strategy Group — Strat Creator as container -->
       <div class="border-2 border-emerald-700/60 bg-emerald-900/20 rounded-xl p-4 flex flex-col gap-2">
         <p class="font-bold text-emerald-300 text-sm text-center mb-1">Strat Creator</p>
-        <div class="grid grid-cols-3 gap-2" style="min-width: 0;">
+        <div class="grid grid-cols-2 gap-2">
           <div class="arch-node bg-emerald-900/40 border border-emerald-700/60 rounded-lg px-2 py-1.5 text-center min-w-0">
             <p class="font-medium text-emerald-300 text-[10px]">Test Planner</p>
           </div>
@@ -951,22 +960,16 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase">Stage 1</span>
         <h3 class="text-xl font-bold text-white">Request for Enhancement</h3>
       </div>
-      <p class="text-slate-400 mb-4">A customer or product manager submits a feature request. This is where the pipeline begins.</p>
+      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The What</span> — A customer or product manager submits a feature request. This is where the pipeline begins.</p>
 
-      <div class="grid md:grid-cols-2 gap-6">
-        <div>
-          <h4 class="text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wider">Summary</h4>
-          <p class="text-slate-400 text-sm leading-relaxed">{md_inline_to_html(rfe_summary)}</p>
+      <div class="mb-4">
+        <a href="https://redhat.atlassian.net/browse/RHAIRFE-2224" target="_blank"
+           class="text-blue-400 hover:text-blue-300 font-mono font-semibold text-lg">RHAIRFE-2224</a>
+        <span class="text-slate-300 text-lg ml-2">{escape(title)}</span>
+      </div>
 
-          <h4 class="text-sm font-semibold text-slate-300 mt-4 mb-2 uppercase tracking-wider">Affected Customers</h4>
-          <p class="text-slate-400 text-sm leading-relaxed">{md_inline_to_html(customers)}</p>
-
-          <h4 class="text-sm font-semibold text-slate-300 mt-4 mb-2 uppercase tracking-wider">Business Justification</h4>
-          <p class="text-slate-400 text-sm leading-relaxed">{md_inline_to_html(biz_justification)}</p>
-        </div>
-        <div>
-          {screenshot_slot("rfe", "Screenshot: Jira RFE Ticket")}
-        </div>
+      <div>
+        {screenshot_slot("rfe", "Screenshot: Jira RFE Ticket")}
       </div>
     </div>
   </div>
