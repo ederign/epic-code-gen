@@ -138,21 +138,24 @@ class TestCIStateMachine:
 
         assert action == SKIPPED
 
-    def test_blocked_becomes_ready_when_deps_done(self, tmp_path):
+    def test_blocked_falls_through_to_ready_when_deps_done(self, tmp_path):
         save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
                         {"status": "Done"})
 
         epic = _epic("E002", deps=["E001"])
         state = {"status": "Blocked", "blocked_by": ["E001"]}
-        args = _args(tmp_path)
+        args = _args(tmp_path, dry_run=True)
 
         action, from_s, to_s, detail = ci_process_epic(
             epic, state, args, "srv", "usr", "tok")
 
         assert action == PROCESSED
         assert from_s == "Blocked"
-        assert to_s == "Ready"
-        assert "resolved" in detail.lower()
+        assert "unblocked" in detail.lower()
+
+        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "E002")
+        assert saved["status"] == "Ready"
+        assert "blocked_by" not in saved
 
     def test_blocked_stays_blocked_with_unmet_deps(self, tmp_path):
         epic = _epic("E002", deps=["E001"])

@@ -1364,7 +1364,11 @@ def _ci_handle_blocked(epic, state, args, server, user, token):
     if "blocked_by" in state:
         del state["blocked_by"]
     save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
-    return PROCESSED, "Blocked", "Ready", "Dependencies resolved"
+
+    # Fall through to codegen now that deps are resolved
+    action, _, to_state, detail = _ci_handle_ready(
+        epic, state, args, server, user, token)
+    return action, "Blocked", to_state, f"Unblocked; {detail}"
 
 
 def _create_pr_for_epic(epic, state, args):
