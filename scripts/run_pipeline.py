@@ -1068,6 +1068,13 @@ def _ci_handle_ready(epic, state, args, server, user, token):
         state["status"] = "ReviewPending"
         save_epic_state(
             args.data_repo, epic["strategy_key"], epic_id, state)
+
+        # Fall through to review/PR creation if scores already exist
+        action, _, to_state, detail = _ci_handle_review_pending(
+            epic, state, args, server, user, token)
+        if action != SKIPPED:
+            return action, "Ready", to_state, \
+                f"Codegen v{state['current_version']}; {detail}"
         return PROCESSED, "Ready", "ReviewPending", \
             f"Codegen v{state['current_version']} completed"
     else:

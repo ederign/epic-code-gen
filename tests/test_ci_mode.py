@@ -202,6 +202,35 @@ class TestCIStateMachine:
         assert action == SKIPPED
         assert "Waiting" in detail
 
+    def test_review_pending_iterates_on_low_scores(self, tmp_path):
+        """Low scores with remaining iterations → iterate (Ready)."""
+        epic = _epic("E001")
+        state = {"status": "ReviewPending", "current_version": 1}
+        args = _args(tmp_path)
+
+        scores_dir = os.path.join(
+            "artifacts", "codegen-runs", "E001", "v1")
+        os.makedirs(scores_dir, exist_ok=True)
+        with open(os.path.join(scores_dir, "scores.json"), "w") as f:
+            json.dump({
+                "weighted_average": 5.0,
+                "dimensions": {
+                    "architecture": {"score": 5},
+                    "tests": {"score": 4},
+                    "lint": {"score": 6},
+                    "intent": {"score": 5},
+                },
+            }, f)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "Ready"
+
+        os.remove(os.path.join(scores_dir, "scores.json"))
+        os.removedirs(scores_dir)
+
     def test_ready_dry_run_doesnt_invoke(self, tmp_path):
         epic = _epic("E001")
         state = {"status": "Ready", "current_version": 0}
