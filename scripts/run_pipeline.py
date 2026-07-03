@@ -75,10 +75,17 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
 
 
+STATUS_ALIASES = {
+    "done": ["resolved", "closed"],
+    "in progress": ["in development"],
+}
+
+
 def transition_issue(server, user, token, issue_key, target_status):
     """Transition a Jira issue to the given status.
 
     Discovers available transitions and matches by name (case-insensitive).
+    Falls back to STATUS_ALIASES when no exact match is found.
 
     Returns:
         tuple: (success: bool, from_status: str) — from_status is the
@@ -92,9 +99,15 @@ def transition_issue(server, user, token, issue_key, target_status):
         return False, ""
 
     target_lower = target_status.lower()
-    for t in transitions:
-        to_name = t.get("to", {}).get("name", "")
-        if to_name.lower() == target_lower:
+    available_map = {
+        t.get("to", {}).get("name", "").lower(): t for t in transitions
+    }
+
+    candidates = [target_lower] + STATUS_ALIASES.get(target_lower, [])
+    for candidate in candidates:
+        if candidate in available_map:
+            t = available_map[candidate]
+            to_name = t.get("to", {}).get("name", "")
             try:
                 do_transition(server, user, token, issue_key, t["id"])
                 print(f"  {issue_key}: transitioned to '{to_name}'")
