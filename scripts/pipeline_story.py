@@ -2056,7 +2056,7 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-purple-500/20 text-purple-400 text-xs font-semibold uppercase">Stage 3</span>
         <h3 class="text-xl font-bold text-white">Epic Decomposition</h3>
       </div>
-      <p class="text-slate-400 mb-4">AI breaks the strategy into ordered engineering tasks (epics) with a dependency graph. Tasks are processed in topological order &mdash; blocked work waits for upstream. When a strategy requires investigation before epic breakdown, the pipeline creates a <strong class="text-white">research spike</strong> to gather the needed context first.</p>
+      <p class="text-slate-400 mb-4">AI breaks the strategy into ordered engineering tasks (epics) with a dependency graph. Tasks are ordered topologically for processing &mdash; blocked work waits for upstream. When a strategy requires investigation before epic breakdown, the pipeline creates a <strong class="text-white">research spike</strong> to gather the needed context first.</p>
 
       <div class="grid md:grid-cols-2 gap-6">
         <div>
