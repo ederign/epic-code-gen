@@ -135,49 +135,191 @@ def escape(text):
 
 
 def md_inline_to_html(text):
-    """Convert basic inline markdown (bold, italic, code) to HTML."""
+    """Convert inline markdown (bold, italic, code, links) to HTML."""
     if not text:
         return ""
     t = html.escape(str(text))
-    t = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', t)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<strong class="text-slate-200">\1</strong>', t)
     t = re.sub(r'\*(.+?)\*', r'<em>\1</em>', t)
-    t = re.sub(r'`(.+?)`', r'<code class="text-blue-400 bg-slate-800 px-1 rounded text-xs">\1</code>', t)
+    t = re.sub(r'`(.+?)`', r'<code class="text-blue-400 bg-slate-800/80 px-1.5 py-0.5 rounded text-xs font-mono">\1</code>', t)
+    t = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)',
+        r'<a href="\2" target="_blank" class="text-blue-400 hover:text-blue-300 underline decoration-blue-500/30">\1</a>',
+        t,
+    )
     t = t.replace("\n", "<br>")
     return t
 
 
 def md_to_html(text):
-    """Convert markdown with headers, lists, paragraphs, and inline formatting to HTML."""
+    """Convert markdown to styled HTML for dark-themed dashboard display."""
     if not text:
         return ""
-    lines = text.strip().splitlines()
+    raw = text.strip()
+    # Strip YAML frontmatter
+    if raw.startswith("---"):
+        end = raw.find("---", 3)
+        if end != -1:
+            raw = raw[end + 3:].strip()
+
+    lines = raw.splitlines()
     html_parts = []
-    in_list = False
-    for line in lines:
+    i = 0
+    list_stack = []  # Track nested list types: 'ul' or 'ol'
+
+    def close_lists():
+        while list_stack:
+            html_parts.append(f"</{list_stack.pop()}>")
+
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+
+        # Empty line
         if not stripped:
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
-            html_parts.append("")
+            close_lists()
+            i += 1
             continue
-        if stripped.startswith("### "):
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
-            html_parts.append(f'<h5 class="font-semibold text-slate-200 mt-4 mb-2">{md_inline_to_html(stripped[4:])}</h5>')
-        elif stripped.startswith("- "):
-            if not in_list:
-                html_parts.append('<ul class="list-disc list-inside space-y-1 ml-2">')
-                in_list = True
+
+        # Fenced code block
+        if stripped.startswith("```"):
+            close_lists()
+            lang = stripped[3:].strip()
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(escape(lines[i]))
+                i += 1
+            i += 1  # skip closing ```
+            code_content = "\n".join(code_lines)
+            html_parts.append(
+                f'<div class="bg-slate-950 border border-slate-700/50 rounded-lg p-3 my-3 font-mono text-xs overflow-x-auto">'
+                f'<pre class="text-slate-300 whitespace-pre">{code_content}</pre></div>'
+            )
+            continue
+
+        # Horizontal rule
+        if re.match(r'^-{3,}$', stripped) or re.match(r'^\*{3,}$', stripped):
+            close_lists()
+            html_parts.append('<hr class="border-slate-700/50 my-4">')
+            i += 1
+            continue
+
+        # Headers
+        hdr = re.match(r'^(#{1,4})\s+(.+)$', stripped)
+        if hdr:
+            close_lists()
+            level = len(hdr.group(1))
+            content = md_inline_to_html(hdr.group(2))
+            styles = {
+                1: 'text-lg font-bold text-slate-100 mt-5 mb-3 pb-2 border-b border-slate-700/50',
+                2: 'text-base font-bold text-slate-200 mt-4 mb-2',
+                3: 'text-sm font-semibold text-slate-200 mt-4 mb-2',
+                4: 'text-sm font-semibold text-slate-300 mt-3 mb-1',
+            }
+            tag = f"h{level + 2}" if level <= 2 else "h5"
+            html_parts.append(f'<{tag} class="{styles[level]}">{content}</{tag}>')
+            i += 1
+            continue
+
+        # Table (pipe-delimited)
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            close_lists()
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                table_lines.append(lines[i].strip())
+                i += 1
+            if len(table_lines) >= 2:
+                headers = [c.strip() for c in table_lines[0].strip("|").split("|")]
+                # Skip separator row (|---|---|)
+                data_start = 1
+                if len(table_lines) > 1 and re.match(r'^[\|\s\-:]+$', table_lines[1]):
+                    data_start = 2
+                rows = []
+                for tl in table_lines[data_start:]:
+                    rows.append([c.strip() for c in tl.strip("|").split("|")])
+                th = "".join(
+                    f'<th class="px-3 py-2 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">{md_inline_to_html(h)}</th>'
+                    for h in headers
+                )
+                tbody = ""
+                for row in rows:
+                    cells = "".join(
+                        f'<td class="px-3 py-2 text-sm text-slate-300 border-t border-slate-700/40">{md_inline_to_html(c)}</td>'
+                        for c in row
+                    )
+                    tbody += f"<tr class='hover:bg-slate-800/30'>{cells}</tr>"
+                html_parts.append(
+                    f'<div class="overflow-x-auto my-3"><table class="w-full border-collapse">'
+                    f'<thead><tr class="border-b border-slate-600/50">{th}</tr></thead>'
+                    f'<tbody>{tbody}</tbody></table></div>'
+                )
+            continue
+
+        # Blockquote
+        if stripped.startswith("> ") or stripped == ">":
+            close_lists()
+            quote_lines = []
+            while i < len(lines):
+                s = lines[i].strip()
+                if s.startswith("> "):
+                    quote_lines.append(s[2:])
+                elif s == ">":
+                    quote_lines.append("")
+                else:
+                    break
+                i += 1
+            quote_html = md_inline_to_html("\n".join(quote_lines))
+            html_parts.append(
+                f'<blockquote class="border-l-2 border-blue-500/50 pl-3 py-1 my-3 text-sm text-slate-400 italic">'
+                f'{quote_html}</blockquote>'
+            )
+            continue
+
+        # Checkbox list item
+        cb = re.match(r'^- \[([ xX])\]\s+(.+)$', stripped)
+        if cb:
+            if not list_stack or list_stack[-1] != "ul":
+                close_lists()
+                html_parts.append('<ul class="space-y-1.5 ml-1 my-2">')
+                list_stack.append("ul")
+            checked = cb.group(1).lower() == "x"
+            icon = (
+                '<svg class="w-4 h-4 text-emerald-400 inline mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+                if checked else
+                '<svg class="w-4 h-4 text-slate-500 inline mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" stroke-width="2"/></svg>'
+            )
+            html_parts.append(f'<li class="flex items-start gap-0 text-sm">{icon}<span>{md_inline_to_html(cb.group(2))}</span></li>')
+            i += 1
+            continue
+
+        # Bullet list
+        if stripped.startswith("- "):
+            if not list_stack or list_stack[-1] != "ul":
+                close_lists()
+                html_parts.append('<ul class="list-disc list-inside space-y-1 ml-3 my-2 text-sm">')
+                list_stack.append("ul")
             html_parts.append(f'<li>{md_inline_to_html(stripped[2:])}</li>')
-        else:
-            if in_list:
-                html_parts.append("</ul>")
-                in_list = False
-            html_parts.append(f'<p class="mb-2">{md_inline_to_html(stripped)}</p>')
-    if in_list:
-        html_parts.append("</ul>")
+            i += 1
+            continue
+
+        # Numbered list
+        num = re.match(r'^(\d+)\.\s+(.+)$', stripped)
+        if num:
+            if not list_stack or list_stack[-1] != "ol":
+                close_lists()
+                html_parts.append('<ol class="list-decimal list-inside space-y-1 ml-3 my-2 text-sm">')
+                list_stack.append("ol")
+            html_parts.append(f'<li>{md_inline_to_html(num.group(2))}</li>')
+            i += 1
+            continue
+
+        # Regular paragraph
+        close_lists()
+        html_parts.append(f'<p class="mb-2 text-sm">{md_inline_to_html(stripped)}</p>')
+        i += 1
+
+    close_lists()
     return "\n".join(html_parts)
 
 
@@ -393,10 +535,25 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
     pr_replies = epic_data.get("pr_replies", {}).get("replies", [])
 
+    STATUS_LABELS = {
+        "PRCreated": "PR Opened",
+        "ReviewPending": "Code Generated",
+        "Blocked": "Blocked",
+        "Done": "Done",
+        "completed": "Done",
+        "InProgress": "In Progress",
+        "Failed": "Failed",
+    }
+
+    def friendly_status(raw):
+        return STATUS_LABELS.get(raw, raw)
+
     # Build vertical DAG HTML
     epic_status_map = {ep["epic_id"]: ep.get("status", "") for ep in epics}
+    epic_summary_by_id = {ep["epic_id"]: ep for ep in epics}
 
-    def dag_node_html(eid):
+    def dag_node_static_html(eid):
+        """Static DAG node with final status colors (for Epic Breakdown panel)."""
         status = epic_status_map.get(eid, "")
         short_id = eid.split("-")[-1]
         ep_title = epic_titles.get(eid, "")
@@ -405,17 +562,22 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             node_bg = "bg-blue-900/40 border-blue-600/60"
             node_text = "text-blue-300"
             dot_color = "bg-blue-500"
-            status_label = "PR Created"
-        elif status in ("Done", "Closed"):
+            status_label = "PR Opened"
+        elif status in ("Done", "Closed", "completed"):
             node_bg = "bg-emerald-900/40 border-emerald-600/60"
             node_text = "text-emerald-300"
             dot_color = "bg-emerald-500"
             status_label = "Done"
-        else:
+        elif status == "Blocked":
             node_bg = "bg-red-900/30 border-red-700/40"
             node_text = "text-red-300"
             dot_color = "bg-red-500"
             status_label = "Blocked"
+        else:
+            node_bg = "bg-amber-900/30 border-amber-700/40"
+            node_text = "text-amber-300"
+            dot_color = "bg-amber-500"
+            status_label = friendly_status(status)
         return f"""<div class="arch-node {node_bg} border rounded-lg px-4 py-3 text-center min-w-[160px]">
             <p class="font-mono text-xs font-bold {node_text}">{escape(short_id)}</p>
             <p class="text-[10px] text-slate-400 mt-1 leading-tight">{escape(short_title)}</p>
@@ -425,17 +587,51 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             </div>
           </div>"""
 
-    down_arrow = """<div class="flex justify-center py-1">
-        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/>
-        </svg>
-      </div>"""
+    def dag_node_html(eid):
+        """Animated DAG node starting in muted state (for Agent Loop panel)."""
+        short_id = eid.split("-")[-1]
+        ep_title = epic_titles.get(eid, "")
+        short_title = ep_title[:30] + "..." if len(ep_title) > 30 else ep_title
+        has_deps = bool(epic_deps.get(eid))
+        init_label = "Blocked" if has_deps else "Queued"
+        return f"""<div id="dag-node-{escape(short_id)}" data-epic="{escape(eid)}"
+                        class="dag-node arch-node border rounded-lg px-4 py-3 text-center min-w-[160px]">
+            <p class="font-mono text-xs font-bold dag-node-id">{escape(short_id)}</p>
+            <p class="text-[10px] text-slate-400 mt-1 leading-tight">{escape(short_title)}</p>
+            <div class="flex items-center justify-center gap-1.5 mt-2">
+              <span class="w-1.5 h-1.5 rounded-full dag-node-dot"></span>
+              <span class="text-[10px] dag-node-label">{escape(init_label)}</span>
+            </div>
+          </div>"""
 
-    fork_connector = """<div class="flex justify-center py-1">
-        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/>
-        </svg>
-      </div>"""
+    def dag_edge_html(parent_id, child_ids):
+        """Edge connector between DAG layers with IDs for animation."""
+        p_short = parent_id.split("-")[-1]
+        if len(child_ids) == 1:
+            c_short = child_ids[0].split("-")[-1]
+            edge_id = f"dag-edge-{p_short}-{c_short}"
+            return f"""<div id="{edge_id}" class="dag-edge flex justify-center py-1">
+                <svg class="w-5 h-8 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 20 32">
+                  <line x1="10" y1="0" x2="10" y2="28" stroke-width="2" stroke-linecap="round"/>
+                  <path d="M6 24l4 6 4-6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                </svg>
+              </div>"""
+        else:
+            edge_id = f"dag-edge-{p_short}-fork"
+            n = len(child_ids)
+            w = 40 * n
+            mid = w / 2
+            lines_svg = f'<line x1="{mid}" y1="0" x2="{mid}" y2="12" stroke-width="2" stroke-linecap="round"/>'
+            lines_svg += f'<line x1="{20}" y1="12" x2="{w - 20}" y2="12" stroke-width="2" stroke-linecap="round"/>'
+            for i in range(n):
+                cx = 20 + i * 40
+                lines_svg += f'<line x1="{cx}" y1="12" x2="{cx}" y2="28" stroke-width="2" stroke-linecap="round"/>'
+                lines_svg += f'<path d="M{cx-4} 24l4 6 4-6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+            return f"""<div id="{edge_id}" class="dag-edge flex justify-center py-1">
+                <svg class="text-slate-700" style="width:{w}px;height:32px" fill="none" stroke="currentColor" viewBox="0 0 {w} 32">
+                  {lines_svg}
+                </svg>
+              </div>"""
 
     # Build DAG by topological layers
     roots = [eid for eid in [ep["epic_id"] for ep in epics] if not epic_deps.get(eid)]
@@ -458,10 +654,39 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
     build_layers(roots)
 
+    static_chevron = """<div class="flex justify-center py-1">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7"/>
+        </svg>
+      </div>"""
+
+    dep_graph_dag_static = '<div class="flex flex-col items-center gap-0">'
+    for li, layer in enumerate(layers):
+        if li > 0:
+            dep_graph_dag_static += static_chevron
+        if len(layer) == 1:
+            dep_graph_dag_static += dag_node_static_html(layer[0])
+        else:
+            dep_graph_dag_static += '<div class="flex items-start gap-6 justify-center">'
+            for eid in layer:
+                dep_graph_dag_static += dag_node_static_html(eid)
+            dep_graph_dag_static += '</div>'
+    dep_graph_dag_static += '</div>'
+
     dep_graph_dag = '<div class="flex flex-col items-center gap-0">'
     for li, layer in enumerate(layers):
         if li > 0:
-            dep_graph_dag += fork_connector
+            prev_layer = layers[li - 1]
+            parent = prev_layer[0]
+            for p_eid in prev_layer:
+                children_in_layer = [c for c in epic_blocks.get(p_eid, []) if c in layer]
+                if children_in_layer:
+                    parent = p_eid
+                    break
+            children_in_layer = [c for c in layer if any(
+                c in epic_blocks.get(p, []) for p in prev_layer
+            )]
+            dep_graph_dag += dag_edge_html(parent, children_in_layer if children_in_layer else layer)
         if len(layer) == 1:
             dep_graph_dag += dag_node_html(layer[0])
         else:
@@ -470,6 +695,129 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                 dep_graph_dag += dag_node_html(eid)
             dep_graph_dag += '</div>'
     dep_graph_dag += '</div>'
+
+    # Build DAG animation frames from run log
+    def build_dag_animation_frames():
+        all_eids = [ep["epic_id"] for ep in epics]
+
+        node_states = {}
+        for eid in all_eids:
+            if epic_deps.get(eid):
+                node_states[eid] = {"state": "blocked", "label": "Blocked"}
+            else:
+                node_states[eid] = {"state": "queued", "label": "Queued"}
+
+        def snap():
+            return {k: dict(v) for k, v in node_states.items()}
+
+        def edge_ids_for(eid):
+            edges = []
+            p_short = eid.split("-")[-1]
+            for child in epic_blocks.get(eid, []):
+                edges.append(f"dag-edge-{p_short}-{child.split('-')[-1]}")
+            edges.append(f"dag-edge-{p_short}-fork")
+            return edges
+
+        blocked_count = sum(1 for e in all_eids if epic_deps.get(e))
+        queued_count = len(all_eids) - blocked_count
+        frames = [{"label": "Pipeline Start",
+                   "desc": f"Agent scans dependency queue — {queued_count} eligible, {blocked_count} blocked",
+                   "icon": "start", "nodeStates": snap(), "glowEdges": [], "pulseNodes": []}]
+
+        for run_idx, run in enumerate(run_log_entries):
+            actions = run.get("actions", [])
+            done_actions = [a for a in actions if a.get("to") in ("Done", "completed", "Closed")]
+            other_actions = [a for a in actions if a not in done_actions]
+            is_fix = any(a.get("from") == "PRChangesRequested" for a in actions)
+
+            if done_actions and other_actions:
+                for da in done_actions:
+                    node_states[da["epic"]] = {"state": "done", "label": "Done"}
+                glow = []
+                for da in done_actions:
+                    glow.extend(edge_ids_for(da["epic"]))
+                short = done_actions[0]["epic"].split("-")[-1]
+                frames.append({"label": "PR Merged", "icon": "merge",
+                               "desc": f"Human engineer approves — PR merged, {short} closed automatically",
+                               "nodeStates": snap(), "glowEdges": glow,
+                               "pulseNodes": [da["epic"] for da in done_actions]})
+
+                for oa in other_actions:
+                    eid = oa["epic"]
+                    node_states[eid] = {"state": "active", "label": "Code Generated"}
+                short = other_actions[0]["epic"].split("-")[-1]
+                frames.append({"label": "Dependency Cascade", "icon": "cascade",
+                               "desc": f"Dependency resolved — {short} unblocked, AI begins code generation",
+                               "nodeStates": snap(), "glowEdges": glow,
+                               "pulseNodes": [oa["epic"] for oa in other_actions]})
+
+                # Show PR opened for unblocked epics that reached PRCreated
+                for oa in other_actions:
+                    eid = oa["epic"]
+                    ep_summary = epic_summary_by_id.get(eid, {})
+                    final_status = ep_summary.get("status", "")
+                    if final_status == "PRCreated":
+                        node_states[eid] = {"state": "active", "label": "PR Opened"}
+                        meta_path = os.path.join(data_dir, eid, "run-metadata.yaml")
+                        meta_text = read_file(meta_path)
+                        versions = 1
+                        final_score = ""
+                        if meta_text:
+                            for line in meta_text.splitlines():
+                                if line.strip().startswith("versions:"):
+                                    try:
+                                        versions = int(line.split(":")[1].strip())
+                                    except (ValueError, IndexError):
+                                        pass
+                                if line.strip().startswith("final_score:"):
+                                    final_score = line.split(":")[1].strip()
+                        score_text = f", scores {final_score}/10" if final_score else ""
+                        frames.append({"label": "PR Opened", "icon": "pr",
+                                       "desc": f"AI completes {versions} iterations{score_text} — opens PR for {short}",
+                                       "nodeStates": snap(), "glowEdges": glow, "pulseNodes": [eid]})
+            else:
+                glow_edges = []
+                pulse_nodes = []
+                for a in actions:
+                    eid = a["epic"]
+                    if a["to"] in ("Done", "completed", "Closed"):
+                        node_states[eid] = {"state": "done", "label": "Done"}
+                        glow_edges.extend(edge_ids_for(eid))
+                    elif a["to"] == "PRCreated":
+                        node_states[eid] = {"state": "active", "label": "PR Opened"}
+                    elif a["to"] == "ReviewPending":
+                        node_states[eid] = {"state": "active", "label": "Code Generated"}
+                    else:
+                        node_states[eid] = {"state": "active", "label": friendly_status(a["to"])}
+                    pulse_nodes.append(eid)
+
+                short = actions[0]["epic"].split("-")[-1] if actions else ""
+                if is_fix:
+                    frames.append({"label": "External Review", "icon": "review",
+                                   "desc": f"AI agents (Copilot, CodeRabbit) and human engineers review {short}",
+                                   "nodeStates": snap(), "glowEdges": glow_edges, "pulseNodes": []})
+                    frames.append({"label": "Fix & Push", "icon": "fix",
+                                   "desc": f"Reviewer requests changes — agent auto-fixes and pushes v{actions[0].get('version', '?')}",
+                                   "nodeStates": snap(), "glowEdges": glow_edges, "pulseNodes": pulse_nodes})
+                else:
+                    v = actions[0].get("version", 1) if actions else 1
+                    ep_data = epic_summary_by_id.get(actions[0]["epic"], {}) if actions else {}
+                    score_info = ep_data.get("scores", {})
+                    wavg = score_info.get("weighted_average", "")
+                    score_text = f" scores {wavg}/10," if wavg else ""
+                    frames.append({"label": "Code Generated", "icon": "code",
+                                   "desc": f"AI generates code,{score_text} 4 independent reviewers — opens PR for {short}",
+                                   "nodeStates": snap(), "glowEdges": glow_edges, "pulseNodes": pulse_nodes})
+
+        still_blocked = [e.split("-")[-1] for e in all_eids if node_states[e]["state"] == "blocked"]
+        if still_blocked:
+            frames.append({"label": "Pipeline Continues", "icon": "wait",
+                           "desc": f"{len(still_blocked)} epics still waiting — will auto-process when dependencies complete",
+                           "nodeStates": snap(), "glowEdges": [], "pulseNodes": []})
+
+        return json.dumps({"frames": frames})
+
+    dag_animation_json = build_dag_animation_frames()
 
     # Build score bars HTML
     score_bars = ""
@@ -494,7 +842,14 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
         status = ep.get("status", "Unknown")
         repo = ep.get("target_repo", "")
         ep_title = epic_titles.get(eid, "")
-        badge_color = "bg-blue-500/20 text-blue-400" if status == "PRCreated" else "bg-red-500/20 text-red-400"
+        if status in ("Done", "Closed", "completed"):
+            badge_color = "bg-emerald-500/20 text-emerald-400"
+        elif status == "PRCreated":
+            badge_color = "bg-blue-500/20 text-blue-400"
+        elif status == "Blocked":
+            badge_color = "bg-red-500/20 text-red-400"
+        else:
+            badge_color = "bg-amber-500/20 text-amber-400"
         pr_link = ""
         if ep.get("pr_url"):
             pr_link = f'<a href="{escape(ep["pr_url"])}" target="_blank" class="text-blue-400 hover:text-blue-300 text-xs">View PR &rarr;</a>'
@@ -504,7 +859,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
           <div class="flex items-center justify-between mb-2">
             <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
                class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
-            <span class="px-2 py-0.5 rounded text-xs font-semibold {badge_color}">{escape(status)}</span>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold {badge_color}">{escape(friendly_status(status))}</span>
           </div>
           <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
           <p class="text-xs text-slate-500 font-mono mb-1">{escape(repo)}</p>
@@ -565,20 +920,6 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
     epic_id_display = epic_with_pr["epic_id"] if epic_with_pr else "N/A"
 
     # Build per-run timeline from run-log.jsonl
-    epic_summary_by_id = {ep["epic_id"]: ep for ep in epics}
-
-    STATUS_LABELS = {
-        "PRCreated": "PR Opened",
-        "ReviewPending": "Code Generated",
-        "Blocked": "Blocked",
-        "Done": "Done",
-        "InProgress": "In Progress",
-        "Failed": "Failed",
-    }
-
-    def friendly_status(raw):
-        return STATUS_LABELS.get(raw, raw)
-
     def build_run_timeline_blocks():
         """Build collapsible timeline blocks grouped by pipeline run."""
         if not run_log_entries:
@@ -601,6 +942,9 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             is_open = "open" if run_idx == len(run_log_entries) - 1 else ""
 
             run_content = ""
+            is_fix_loop = any(
+                a.get("from") == "PRChangesRequested" for a in actions
+            )
             for action in processed_actions:
                 eid = action.get("epic", "")
                 from_state = action.get("from", "")
@@ -612,8 +956,154 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                 repo = ep_info.get("target_repo", "")
                 ep_pr_url = ep_info.get("pr_url", "") or ""
                 pr_num = ep_pr_url.split("/")[-1] if ep_pr_url else ""
+                is_fix = from_state == "PRChangesRequested"
+                is_done = to_state == "Done"
+                is_unblocked = from_state == "Blocked"
 
-                e_scores = edata.get("v1_scores", {})
+                if is_done:
+                    pr_button = ""
+                    if ep_pr_url:
+                        pr_button = f'<a href="{escape(ep_pr_url)}" target="_blank" class="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition-colors"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>View Merged PR</a>'
+                    run_content += f"""
+              <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4 mb-3">
+                <div class="flex items-center gap-2 mb-3">
+                  <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
+                     class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-400">MERGED &amp; CLOSED</span>
+                </div>
+                <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
+                <p class="text-xs text-slate-500 font-mono mb-3">{escape(repo)}</p>
+                <p class="text-sm text-emerald-300">PR merged and Jira issue closed automatically by the pipeline.</p>
+                {pr_button}
+              </div>"""
+                    continue
+
+                if is_unblocked and not edata.get("has_artifacts"):
+                    run_content += f"""
+              <div class="bg-slate-800/50 border border-blue-700/30 rounded-lg p-4 mb-3">
+                <div class="flex items-center gap-2 mb-3">
+                  <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                  <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
+                     class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-500/20 text-blue-400">{escape(friendly_status(to_state))}</span>
+                </div>
+                <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
+                <p class="text-xs text-slate-500 font-mono mb-3">{escape(repo)}</p>
+                <p class="text-sm text-slate-400">Dependencies resolved &mdash; epic unblocked and queued for code generation.</p>
+              </div>"""
+                    continue
+
+                if is_fix:
+                    vdir = f"v{version}"
+                    fix_diff = read_file(os.path.join(
+                        data_dir, eid, vdir, "diff.patch"
+                    ))
+                    fix_feedback = read_file(os.path.join(
+                        data_dir, eid, vdir, "review-feedback.md"
+                    ))
+                    fix_plan = read_file(os.path.join(
+                        data_dir, eid, vdir, "review-response-plan.md"
+                    ))
+                    fix_diff_html = diff_to_html(fix_diff)
+
+                    autofix_img = ""
+                    autofix_path = os.path.join(
+                        screenshots_base, "autofix.png"
+                    )
+                    if os.path.exists(autofix_path):
+                        rel = os.path.relpath(autofix_path, output_dir)
+                        autofix_img = f'<div class="flex justify-center mt-3"><img src="{escape(rel)}" alt="Agent applying code fix" class="rounded-lg border border-amber-700/30 max-w-[50%]" /></div>'
+
+                    pr_button = ""
+                    if ep_pr_url:
+                        pr_button = f'<a href="{escape(ep_pr_url)}" target="_blank" class="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>View PR on GitHub</a>'
+
+                    fix_tab_group = f"fix-{run_idx}-{eid}"
+                    run_content += f"""
+              <div class="bg-slate-800/50 border border-amber-700/30 rounded-lg p-4 mb-3" data-tab-group="{fix_tab_group}">
+                <div class="flex items-center gap-2 mb-3">
+                  <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                  </svg>
+                  <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
+                     class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-400">CODE FIX</span>
+                  <span class="text-xs text-slate-500">v{version}</span>
+                </div>
+                <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
+                <p class="text-xs text-slate-500 font-mono mb-3">{escape(repo)}</p>
+
+                <div class="flex gap-1 border-b border-slate-700 mb-4">
+                  <button class="loop-tab active px-4 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 border-transparent text-slate-400 rounded-t" data-tab="summary" onclick="switchTab('{fix_tab_group}','summary')">Summary</button>
+                  <button class="loop-tab px-4 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 border-transparent text-slate-400 rounded-t" data-tab="details" onclick="switchTab('{fix_tab_group}','details')">Details</button>
+                </div>
+
+                <div class="loop-tab-panel active" data-panel="summary">
+                  <p class="text-sm text-slate-300 mb-3">The pipeline detected review feedback from external AI agents and automatically generated a code fix, pushed on top of the current PR branch.</p>
+                  {autofix_img}
+                  <p class="mt-3 text-sm text-amber-400 font-semibold">&rarr; Code v{version} <span class="text-slate-500 font-normal">(fix applied on top of current PR branch)</span> &mdash; PR #{escape(pr_num)} updated</p>
+                  {pr_button}
+                </div>
+
+                <div class="loop-tab-panel" data-panel="details">
+                  <div class="mb-4">
+                    <h6 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Review Feedback Detected</h6>
+                    <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-3 text-sm text-slate-400">
+                      {md_to_html(fix_feedback) if fix_feedback else '<p class="italic">No feedback details available.</p>'}
+                    </div>
+                  </div>
+
+                  {f"""
+                  <div class="mb-4">
+                    <h6 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Response Plan</h6>
+                    <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-3 text-sm text-slate-400">
+                      {md_to_html(fix_plan)}
+                    </div>
+                  </div>
+                  """ if fix_plan else ""}
+
+                  {f"""
+                  <details class="mt-3">
+                    <summary class="cursor-pointer text-sm font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-2">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                      View fix diff
+                    </summary>
+                    <div class="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[400px] overflow-y-auto">
+                      {fix_diff_html}
+                    </div>
+                  </details>
+                  """ if fix_diff_html.strip() else ""}
+                </div>
+              </div>"""
+                    continue
+
+                # Use final scores from run-metadata if available, else v1
+                meta_yaml = edata.get("metadata", "")
+                final_version = version
+                if meta_yaml:
+                    for ml in meta_yaml.splitlines():
+                        ml = ml.strip()
+                        if ml.startswith("versions:"):
+                            try:
+                                final_version = int(ml.split(":")[1].strip())
+                            except (ValueError, IndexError):
+                                pass
+                        if ml.startswith("final_score:"):
+                            try:
+                                float(ml.split(":")[1].strip())
+                            except (ValueError, IndexError):
+                                pass
+
+                # Try final version scores, fall back to v1
+                final_scores_path = os.path.join(
+                    data_dir, eid, f"v{final_version}", "scores.json"
+                )
+                e_scores = read_json(final_scores_path) if os.path.exists(final_scores_path) else edata.get("v1_scores", {})
                 e_dims = e_scores.get("dimensions", {})
                 e_weighted = e_scores.get("weighted_average", 0)
                 e_verdict = e_scores.get("verdict", "")
@@ -635,55 +1125,115 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                     </div>"""
 
                 verdict_class = "bg-emerald-500/20 text-emerald-400" if e_verdict == "pass" else "bg-red-500/20 text-red-400"
-                e_diff_html = diff_to_html(edata.get("v1_diff", ""))
+                # Use final diff if available
+                final_diff_path = os.path.join(data_dir, eid, f"v{final_version}", "diff.patch")
+                final_diff = read_file(final_diff_path) if os.path.exists(final_diff_path) else edata.get("v1_diff", "")
+                e_diff_html = diff_to_html(final_diff)
+
+                # Display status: use PR status from summary if available
+                display_status = friendly_status(ep_info.get("status", to_state))
+                display_badge = "bg-blue-500/20 text-blue-400" if ep_info.get("pr_url") else "bg-emerald-500/20 text-emerald-400"
 
                 pr_button = ""
                 if ep_pr_url:
                     pr_button = f'<a href="{escape(ep_pr_url)}" target="_blank" class="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>View PR on GitHub</a>'
 
+                tab_group = f"gen-{run_idx}-{eid}"
+                e_spec_html = md_to_html(edata.get("spec", ""))
+                e_plan_html = md_to_html(edata.get("plan", ""))
+                e_task_html = md_to_html(edata.get("task", ""))
+
+                unblocked_note = ""
+                if is_unblocked:
+                    unblocked_note = f"""<div class="flex items-center gap-2 mb-3 px-3 py-2 bg-blue-900/20 border border-blue-700/30 rounded-lg">
+                    <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <span class="text-xs text-blue-300">Dependencies resolved &mdash; unblocked and processed in this same loop.</span>
+                  </div>"""
+
+                iterations_note = ""
+                if final_version > 1:
+                    iterations_note = f' <span class="text-xs text-slate-500">({final_version} iterations)</span>'
+
                 run_content += f"""
-              <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4 mb-3">
+              <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4 mb-3" data-tab-group="{tab_group}">
                 <div class="flex items-center gap-2 mb-3">
                   <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                   </svg>
                   <a href="https://redhat.atlassian.net/browse/{escape(eid)}" target="_blank"
                      class="font-mono text-sm font-bold text-blue-400 hover:text-blue-300">{escape(eid)}</a>
-                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-400">{escape(friendly_status(to_state))}</span>
-                  <span class="text-xs text-slate-500">v{version}</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold {display_badge}">{escape(display_status)}</span>
+                  <span class="text-xs text-slate-500">v{final_version}</span>
                 </div>
+                {unblocked_note}
                 <p class="text-sm text-slate-300 mb-1">{escape(ep_title)}</p>
                 <p class="text-xs text-slate-500 font-mono mb-3">{escape(repo)}</p>
 
-                {f"""
-                <div class="border-t border-slate-700 pt-3 mt-2">
-                  <h6 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Review Scores</h6>
-                  {e_score_bars}
-                  <div class="mt-2 pt-2 border-t border-slate-700 flex items-center justify-between">
-                    <span class="text-sm font-medium text-slate-400">Weighted Average</span>
-                    <div class="flex items-center gap-2">
-                      <span class="text-xl font-bold text-emerald-400">{e_weighted}</span>
-                      <span class="text-sm text-slate-500">/ 10</span>
-                      <span class="px-2 py-0.5 rounded text-xs font-semibold {verdict_class}">{escape(e_verdict.upper()) if e_verdict else 'N/A'}</span>
+                <div class="flex gap-1 border-b border-slate-700 mb-4">
+                  <button class="loop-tab active px-4 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 border-transparent text-slate-400 rounded-t" data-tab="summary" onclick="switchTab('{tab_group}','summary')">Summary</button>
+                  <button class="loop-tab px-4 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 border-transparent text-slate-400 rounded-t" data-tab="artifacts" onclick="switchTab('{tab_group}','artifacts')">Spec &amp; Plan</button>
+                </div>
+
+                <div class="loop-tab-panel active" data-panel="summary">
+                  {f"""
+                  <div class="mb-3">
+                    <h6 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Review Scores</h6>
+                    {e_score_bars}
+                    <div class="mt-2 pt-2 border-t border-slate-700 flex items-center justify-between">
+                      <span class="text-sm font-medium text-slate-400">Weighted Average</span>
+                      <div class="flex items-center gap-2">
+                        <span class="text-xl font-bold text-emerald-400">{e_weighted}</span>
+                        <span class="text-sm text-slate-500">/ 10</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold {verdict_class}">{escape(e_verdict.upper()) if e_verdict else 'N/A'}</span>
+                      </div>
                     </div>
                   </div>
+                  """ if e_dims else ""}
+
+                  {f"""
+                  <details class="mt-3">
+                    <summary class="cursor-pointer text-sm font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-2">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                      View generated diff
+                    </summary>
+                    <div class="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[400px] overflow-y-auto">
+                      {e_diff_html}
+                    </div>
+                  </details>
+                  """ if e_diff_html.strip() else ""}
+
+                  {f'<p class="mt-3 text-sm text-emerald-400 font-semibold">&rarr; Code v{final_version}{iterations_note} <span class="text-slate-500 font-normal">(full epic code gen loop: spec &rarr; code &rarr; review &rarr; score)</span> &mdash; PR #{escape(pr_num)} opened</p>' if pr_num else ""}
+                  {pr_button}
                 </div>
-                """ if e_dims else ""}
 
-                {f"""
-                <details class="mt-3">
-                  <summary class="cursor-pointer text-sm font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-                    View generated diff
-                  </summary>
-                  <div class="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-[400px] overflow-y-auto">
-                    {e_diff_html}
+                <div class="loop-tab-panel" data-panel="artifacts">
+                  {f"""
+                  <div class="mb-4">
+                    <h6 class="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-2">Epic Task</h6>
+                    <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-4 text-sm text-slate-300 leading-relaxed prose prose-invert prose-sm max-w-none">
+                      {e_task_html}
+                    </div>
                   </div>
-                </details>
-                """ if e_diff_html.strip() else ""}
+                  """ if e_task_html else ""}
 
-                {f'<p class="mt-3 text-sm text-emerald-400 font-semibold">&rarr; Code v{version} <span class="text-slate-500 font-normal">(full epic code gen loop: spec &rarr; code &rarr; review &rarr; score)</span> &mdash; PR #{escape(pr_num)} opened</p>' if pr_num else ""}
-                {pr_button}
+                  {f"""
+                  <div class="mb-4">
+                    <h6 class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2">Codegen Spec</h6>
+                    <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-4 text-sm text-slate-300 leading-relaxed prose prose-invert prose-sm max-w-none">
+                      {e_spec_html}
+                    </div>
+                  </div>
+                  """ if e_spec_html else ""}
+
+                  {f"""
+                  <div class="mb-4">
+                    <h6 class="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Implementation Plan</h6>
+                    <div class="bg-slate-900/50 border border-slate-700/30 rounded-lg p-4 text-sm text-slate-300 leading-relaxed prose prose-invert prose-sm max-w-none">
+                      {e_plan_html}
+                    </div>
+                  </div>
+                  """ if e_plan_html else ""}
+                </div>
               </div>"""
 
             if blocked_epics:
@@ -750,8 +1300,19 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             has_prs = any(
                 a.get("to") == "PRCreated" for a in actions
             )
+            next_actions = (
+                run_log_entries[run_idx + 1].get("actions", [])
+                if run_idx + 1 < len(run_log_entries) else []
+            )
+            next_is_fix = any(
+                a.get("from") == "PRChangesRequested" for a in next_actions
+            )
+            next_is_merge = any(
+                a.get("to") == "Done" and a.get("from") == "PRCreated"
+                for a in next_actions
+            )
             is_last_run = run_idx == len(run_log_entries) - 1
-            if has_prs and is_last_run:
+            if has_prs and (next_is_fix or next_is_merge or is_last_run):
                 review_screenshot = ""
                 screenshot_path = os.path.join(
                     screenshots_base, "copilot-review.png"
@@ -771,7 +1332,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                         pr_links += f' <a href="{escape(purl)}" target="_blank" class="font-mono text-xs text-purple-400 hover:text-purple-300">{escape(peid)}</a>'
 
                 blocks += f"""
-        <details class="bg-purple-900/10 border border-purple-700/30 rounded-xl my-3 border-dashed overflow-hidden" open>
+        <details class="bg-purple-900/10 border border-purple-700/30 rounded-xl my-3 border-dashed overflow-hidden" {"open" if is_last_run or next_is_merge else ""}>
           <summary class="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-purple-900/20 transition-colors">
             <div class="w-10 h-10 rounded-full bg-purple-900/50 border-2 border-purple-500/50 flex items-center justify-center">
               <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -789,11 +1350,17 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             <svg class="w-5 h-5 text-slate-500 shrink-0 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
           </summary>
           <div class="px-5 pb-5">
-            <div class="bg-slate-900/50 border border-purple-700/20 rounded-lg p-4">
+            {f"""<div class="bg-emerald-900/20 border border-emerald-700/30 rounded-lg p-4">
+              <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span class="text-sm text-emerald-300 font-semibold">Changes from Agentic Loop {run_idx + 1} are human engineer approved and merged.</span>
+                {pr_links}
+              </div>
+            </div>""" if next_is_merge else f"""<div class="bg-slate-900/50 border border-purple-700/20 rounded-lg p-4">
               <p class="text-sm text-slate-400 mb-2">Open PRs from Loop {run_idx + 1} are being reviewed by external AI agents (<span class="text-purple-300 font-semibold">GitHub Copilot</span>, <span class="text-purple-300 font-semibold">CodeRabbit</span>) and human engineers.{pr_links}</p>
               {review_screenshot}
               <p class="text-xs text-slate-500 mt-3 italic">The pipeline will pick up review feedback and act on it in the next agentic loop.</p>
-            </div>
+            </div>"""}
           </div>
         </details>"""
 
@@ -889,10 +1456,118 @@ tailwind.config = {{
     box-shadow: 0 0 15px rgba(255,255,255,0.1);
   }}
 
+  /* DAG animation */
+  .dag-node {{
+    transition: background 0.7s ease, border-color 0.7s ease, box-shadow 0.7s ease;
+  }}
+  .dag-node .dag-node-id,
+  .dag-node .dag-node-label {{
+    transition: color 0.7s ease;
+  }}
+  .dag-node .dag-node-dot {{
+    transition: background 0.7s ease;
+  }}
+
+  .dag-node.state-queued {{
+    background: rgba(51, 65, 85, 0.3);
+    border-color: rgba(71, 85, 105, 0.4);
+  }}
+  .dag-node.state-queued .dag-node-id {{ color: #94a3b8; }}
+  .dag-node.state-queued .dag-node-dot {{ background: #64748b; }}
+  .dag-node.state-queued .dag-node-label {{ color: #64748b; }}
+
+  .dag-node.state-active {{
+    background: rgba(30, 58, 138, 0.4);
+    border-color: rgba(37, 99, 235, 0.6);
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+  }}
+  .dag-node.state-active .dag-node-id {{ color: #93c5fd; }}
+  .dag-node.state-active .dag-node-dot {{ background: #3b82f6; }}
+  .dag-node.state-active .dag-node-label {{ color: #93c5fd; }}
+
+  .dag-node.state-done {{
+    background: rgba(6, 78, 59, 0.4);
+    border-color: rgba(16, 185, 129, 0.6);
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+  }}
+  .dag-node.state-done .dag-node-id {{ color: #6ee7b7; }}
+  .dag-node.state-done .dag-node-dot {{ background: #10b981; }}
+  .dag-node.state-done .dag-node-label {{ color: #6ee7b7; }}
+
+  .dag-node.state-blocked {{
+    background: rgba(127, 29, 29, 0.3);
+    border-color: rgba(185, 28, 28, 0.4);
+  }}
+  .dag-node.state-blocked .dag-node-id {{ color: #fca5a5; }}
+  .dag-node.state-blocked .dag-node-dot {{ background: #ef4444; }}
+  .dag-node.state-blocked .dag-node-label {{ color: #fca5a5; }}
+
+  @keyframes dag-pulse {{
+    0% {{ transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }}
+    50% {{ transform: scale(1.08); box-shadow: 0 0 30px rgba(59,130,246,0.4); }}
+    100% {{ transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0); }}
+  }}
+  @keyframes dag-pulse-green {{
+    0% {{ transform: scale(1); box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }}
+    50% {{ transform: scale(1.08); box-shadow: 0 0 30px rgba(16,185,129,0.4); }}
+    100% {{ transform: scale(1); box-shadow: 0 0 0 0 rgba(16,185,129,0); }}
+  }}
+  .dag-node.pulsing {{ animation: dag-pulse 0.8s ease-in-out; }}
+  .dag-node.pulsing-green {{ animation: dag-pulse-green 0.8s ease-in-out; }}
+
+  .dag-edge svg {{
+    transition: color 0.7s ease, filter 0.7s ease;
+  }}
+  .dag-edge.glowing svg {{
+    color: #10b981;
+    filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.6));
+  }}
+  @keyframes edge-glow {{
+    0% {{ filter: drop-shadow(0 0 3px rgba(16,185,129,0.3)); }}
+    50% {{ filter: drop-shadow(0 0 12px rgba(16,185,129,0.7)); }}
+    100% {{ filter: drop-shadow(0 0 3px rgba(16,185,129,0.3)); }}
+  }}
+  .dag-edge.glowing svg {{
+    animation: edge-glow 1.5s ease-in-out infinite;
+  }}
+
+  #dag-replay-btn {{
+    transition: opacity 0.3s ease;
+  }}
+  #dag-activity-log::-webkit-scrollbar {{
+    width: 4px;
+  }}
+  #dag-activity-log::-webkit-scrollbar-track {{
+    background: transparent;
+  }}
+  #dag-activity-log::-webkit-scrollbar-thumb {{
+    background: rgba(71, 85, 105, 0.5);
+    border-radius: 2px;
+  }}
+  .dag-log-entry + .dag-log-entry {{
+    border-top: 1px solid rgba(71, 85, 105, 0.2);
+    padding-top: 0.5rem;
+  }}
+
   .pipeline-arrow {{
     color: #475569;
     font-size: 1.5rem;
     line-height: 1;
+  }}
+
+  .loop-tab {{
+    transition: all 0.2s ease;
+  }}
+  .loop-tab.active {{
+    border-color: #3b82f6;
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.1);
+  }}
+  .loop-tab-panel {{
+    display: none;
+  }}
+  .loop-tab-panel.active {{
+    display: block;
   }}
 </style>
 </head>
@@ -918,7 +1593,7 @@ tailwind.config = {{
          class="text-blue-400 hover:text-blue-300 font-mono font-semibold">{escape(strat_key)}</a>
       &mdash; {escape(title.split(']')[-1].strip() if ']' in title else title)}
     </p>
-    <p class="text-slate-500 text-sm mt-1">Generated {escape(timestamp)}</p>
+    <p class="text-slate-500 text-sm mt-1">Eder Ignatowicz &middot; Red Hat AI &middot; {escape(timestamp)}</p>
   </div>
 </header>
 
@@ -1243,7 +1918,7 @@ tailwind.config = {{
         <div>
           <h4 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider">Dependency Graph</h4>
           <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4">
-            {dep_graph_dag}
+            {dep_graph_dag_static}
           </div>
         </div>
         <div>
@@ -1268,19 +1943,6 @@ tailwind.config = {{
         The agent picks the next eligible epic from the queue and enters a <strong class="text-white">loop</strong>:
         generate code &rarr; self-review &rarr; open PR &rarr; human/agent review &rarr; fix &rarr; repeat until approved &rarr; merge &rarr; <strong class="text-white">next epic</strong>.
       </p>
-
-      <!-- ── Epic Queue ── -->
-      <div class="mb-8">
-        <h4 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wider flex items-center gap-2">
-          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
-          </svg>
-          Epic Queue ({len(epics)} epics)
-        </h4>
-        <div class="pb-2">
-          {dep_graph_dag}
-        </div>
-      </div>
 
       <!-- ── The Loop Diagram ── -->
       <div class="mb-8">
@@ -1369,6 +2031,38 @@ tailwind.config = {{
         </div>
       </div>
 
+      <!-- ── Epic Queue with Activity Log ── -->
+      <div class="mb-8" id="dag-animation-container">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+            </svg>
+            Epic Queue ({len(epics)} epics)
+          </h4>
+          <button id="dag-replay-btn" onclick="replayDagAnimation()"
+                  class="text-[10px] text-slate-500 hover:text-slate-300 border border-slate-700 rounded px-2 py-0.5 opacity-0 flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Replay
+          </button>
+        </div>
+        <div class="grid md:grid-cols-[1fr_1.2fr] gap-6">
+          <div class="flex items-center justify-center pb-2">
+            {dep_graph_dag}
+          </div>
+          <div class="bg-slate-800/30 border border-slate-700/30 rounded-lg p-4 min-h-[200px]">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+              <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Pipeline Activity</span>
+            </div>
+            <div id="dag-activity-log" class="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ── Pipeline Run Timeline ── -->
       <div>
         <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
@@ -1442,7 +2136,7 @@ tailwind.config = {{
       </div>
       <span class="text-sm text-slate-500">Red Hat AI</span>
     </div>
-    <span class="text-xs text-slate-600">Generated {escape(timestamp)}</span>
+    <span class="text-xs text-slate-600">Eder Ignatowicz &middot; {escape(timestamp)}</span>
   </div>
 </footer>
 
@@ -1481,6 +2175,10 @@ tailwind.config = {{
     setTimeout(() => {{
       panel.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
     }}, 100);
+
+    if (stage === 'agentloop' && !dagAnimPlayed) {{
+      setTimeout(() => playDagAnimation(), 700);
+    }}
   }}
 
   // Animate score bars on visibility
@@ -1494,6 +2192,125 @@ tailwind.config = {{
     }});
   }});
   document.querySelectorAll('.detail-panel').forEach(p => observer.observe(p));
+
+  function switchTab(groupId, tabId) {{
+    const group = document.querySelector(`[data-tab-group="${{groupId}}"]`);
+    if (!group) return;
+    group.querySelectorAll('.loop-tab').forEach(t => t.classList.remove('active'));
+    group.querySelectorAll('.loop-tab-panel').forEach(p => p.classList.remove('active'));
+    group.querySelector(`[data-tab="${{tabId}}"]`).classList.add('active');
+    group.querySelector(`[data-panel="${{tabId}}"]`).classList.add('active');
+  }}
+
+  // DAG Animation Controller
+  const dagAnimData = {dag_animation_json};
+  let dagAnimTimer = null;
+  let dagCurrentFrame = -1;
+  let dagAnimPlayed = false;
+  const DAG_FRAME_DELAY = 2500;
+
+  function setDagFrame(idx) {{
+    const frame = dagAnimData.frames[idx];
+    if (!frame) return;
+
+    const states = frame.nodeStates;
+    const stateClasses = ['state-queued', 'state-active', 'state-done', 'state-blocked'];
+
+    Object.keys(states).forEach(epicId => {{
+      const ns = states[epicId];
+      const node = document.querySelector(`[data-epic="${{epicId}}"]`);
+      if (!node) return;
+
+      stateClasses.forEach(c => node.classList.remove(c));
+      node.classList.add('state-' + ns.state);
+
+      const label = node.querySelector('.dag-node-label');
+      if (label) label.textContent = ns.label;
+    }});
+
+    (frame.pulseNodes || []).forEach(epicId => {{
+      const node = document.querySelector(`[data-epic="${{epicId}}"]`);
+      if (!node) return;
+      const ns = states[epicId];
+      const cls = (ns && ns.state === 'done') ? 'pulsing-green' : 'pulsing';
+      node.classList.remove('pulsing', 'pulsing-green');
+      void node.offsetWidth;
+      node.classList.add(cls);
+      node.addEventListener('animationend', () => {{
+        node.classList.remove('pulsing', 'pulsing-green');
+      }}, {{ once: true }});
+    }});
+
+    document.querySelectorAll('.dag-edge').forEach(e => e.classList.remove('glowing'));
+    (frame.glowEdges || []).forEach(edgeId => {{
+      const edge = document.getElementById(edgeId);
+      if (edge) edge.classList.add('glowing');
+    }});
+
+    const iconMap = {{
+      start: '<svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+      code: '<svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>',
+      review: '<svg class="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>',
+      fix: '<svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>',
+      merge: '<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+      cascade: '<svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>',
+      pr: '<svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>',
+      wait: '<svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+    }};
+
+    const log = document.getElementById('dag-activity-log');
+    if (log) {{
+      const icon = iconMap[frame.icon] || iconMap.start;
+      const entry = document.createElement('div');
+      entry.className = 'flex items-start gap-2 dag-log-entry';
+      entry.style.opacity = '0';
+      entry.style.transform = 'translateY(8px)';
+      entry.innerHTML = `<div class="shrink-0 mt-0.5">${{icon}}</div><div><p class="text-xs font-semibold text-slate-300">${{frame.label}}</p><p class="text-[11px] text-slate-500 leading-snug">${{frame.desc || ''}}</p></div>`;
+      log.appendChild(entry);
+      requestAnimationFrame(() => {{
+        entry.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+        entry.style.opacity = '1';
+        entry.style.transform = 'translateY(0)';
+      }});
+      entry.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+    }}
+  }}
+
+  function playDagAnimation() {{
+    if (dagAnimData.frames.length === 0) return;
+
+    const log = document.getElementById('dag-activity-log');
+    if (log) log.innerHTML = '';
+
+    dagCurrentFrame = 0;
+    setDagFrame(0);
+
+    const btn = document.getElementById('dag-replay-btn');
+    if (btn) btn.style.opacity = '0';
+
+    dagAnimTimer = setInterval(() => {{
+      dagCurrentFrame++;
+      if (dagCurrentFrame >= dagAnimData.frames.length) {{
+        clearInterval(dagAnimTimer);
+        dagAnimTimer = null;
+        dagAnimPlayed = true;
+        if (btn) btn.style.opacity = '1';
+        return;
+      }}
+      setDagFrame(dagCurrentFrame);
+    }}, DAG_FRAME_DELAY);
+  }}
+
+  function replayDagAnimation() {{
+    if (dagAnimTimer) {{
+      clearInterval(dagAnimTimer);
+      dagAnimTimer = null;
+    }}
+    document.querySelectorAll('.dag-edge').forEach(e => e.classList.remove('glowing'));
+    dagCurrentFrame = -1;
+    dagAnimPlayed = false;
+    playDagAnimation();
+  }}
 </script>
 </body>
 </html>"""
