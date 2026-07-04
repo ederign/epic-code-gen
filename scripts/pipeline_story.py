@@ -2001,7 +2001,7 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-blue-500/20 text-blue-400 text-xs font-semibold uppercase">Stage 2</span>
         <h3 class="text-xl font-bold text-white">AI-Generated Strategy</h3>
       </div>
-      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The How</span> — AI analyzes the RFE, researches the codebase, consults architecture docs, and produces a comprehensive technical strategy.</p>
+      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The How</span> — AI analyzes the RFE, researches the codebase, consults architecture docs, and produces a comprehensive technical strategy. A Staff Engineer reviews the input and signs off on the RFE before it moves forward.</p>
 
       <div class="mb-4">
         <a href="https://redhat.atlassian.net/browse/{escape(strat_key)}" target="_blank"
