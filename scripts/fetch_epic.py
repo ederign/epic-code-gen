@@ -258,7 +258,7 @@ def generate_epic_task(epic, output_dir="artifacts/epic-tasks"):
         "title": _extract_title(epic),
         "strategy_key": epic["strategy_key"],
         "target_repo": "",
-        "target_branch": "main",
+        "target_branch": "",
         "status": "Pending",
     }
 

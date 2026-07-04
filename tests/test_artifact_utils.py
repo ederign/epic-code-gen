@@ -213,7 +213,7 @@ class TestApplyDefaults:
             "status": "Pending",
         }
         result = apply_defaults(data, "epic-task")
-        assert result["target_branch"] == "main"
+        assert result["target_branch"] == ""
         assert result["components"] is None
         assert result["dependencies"] is None
         assert result["effort_size"] is None

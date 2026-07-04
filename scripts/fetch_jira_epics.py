@@ -112,7 +112,7 @@ def issue_to_epic_data(issue, parent_key, dag):
         "title": fields.get("summary", key),
         "strategy_key": parent_key,
         "target_repo": "",
-        "target_branch": "main",
+        "target_branch": "",
         "status": "Pending",
         "jira_status": fields.get("status", {}).get("name"),
         "components": components or None,

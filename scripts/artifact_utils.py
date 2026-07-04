@@ -46,8 +46,8 @@ SCHEMAS = {
         },
         "target_branch": {
             "type": "string",
-            "required": True,
-            "default": "main",
+            "required": False,
+            "default": "",
         },
         "components": {
             "type": "list",
@@ -136,7 +136,7 @@ SCHEMAS = {
         },
         "target_branch": {
             "type": "string",
-            "required": True,
+            "required": False,
         },
         "codegen_branch": {
             "type": "string",

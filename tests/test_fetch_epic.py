@@ -284,7 +284,7 @@ class TestGenerateEpicTask:
         assert data["epic_id"] == "RHAISTRAT-9999-E001"
         assert data["strategy_key"] == "RHAISTRAT-9999"
         assert data["status"] == "Pending"
-        assert data["target_branch"] == "main"
+        assert data["target_branch"] == ""
 
     def test_includes_dependencies(self, output_dir):
         epic = {

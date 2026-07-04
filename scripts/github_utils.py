@@ -223,6 +223,26 @@ def sync_fork(fork_owner, repo, token, branch="main"):
     return result.get("merge_type") != "none"
 
 
+def get_pr_template(owner, repo, token):
+    """Fetch PR template from target repo. Returns content string or None."""
+    import base64
+    candidates = [
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        ".github/pull_request_template.md",
+        "PULL_REQUEST_TEMPLATE.md",
+        "docs/pull_request_template.md",
+    ]
+    for path in candidates:
+        try:
+            result = api_call(
+                f"/repos/{owner}/{repo}/contents/{path}", token)
+            if result and result.get("content"):
+                return base64.b64decode(result["content"]).decode("utf-8")
+        except urllib.error.HTTPError:
+            continue
+    return None
+
+
 def create_pull_request(upstream_owner, upstream_repo, head_owner, branch,
                         base, title, body, token):
     """Create a pull request from fork branch to upstream base.
