@@ -12,14 +12,34 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 
 import github_utils
 
 
+def _apply_template(body, template):
+    """Append any PR template sections missing from the body."""
+    template_headers = re.findall(r'^(##\s+.+)$', template, re.MULTILINE)
+
+    for header in template_headers:
+        if not re.search(re.escape(header), body, re.IGNORECASE):
+            pattern = (re.escape(header)
+                       + r'\n(.*?)(?=\n##\s|\Z)')
+            match = re.search(pattern, template,
+                              re.MULTILINE | re.DOTALL)
+            if match:
+                body += "\n\n" + match.group(0).rstrip()
+
+    return body
+
+
 def create_pr(upstream_slug, fork_owner, branch, title, body,
               base=None, token_var=None):
     """Create a pull request from fork to upstream.
+
+    Fetches the target repo's PR template and appends any sections
+    missing from the provided body.
 
     Args:
         upstream_slug: upstream owner/repo (e.g., "org/repo")
@@ -41,6 +61,11 @@ def create_pr(upstream_slug, fork_owner, branch, title, body,
         if not repo_info:
             raise ValueError(f"Upstream repo {upstream_slug} not found")
         base = repo_info["default_branch"]
+
+    template = github_utils.get_pr_template(
+        upstream_owner, upstream_repo, token)
+    if template:
+        body = _apply_template(body, template)
 
     pr = github_utils.create_pull_request(
         upstream_owner, upstream_repo,

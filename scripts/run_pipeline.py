@@ -43,7 +43,6 @@ from fetch_jira_epics import (
     is_eligible,
     issue_to_epic_data,
 )
-import github_utils
 from jira_utils import (
     add_comment,
     assign_issue,
@@ -1408,71 +1407,6 @@ def _ci_handle_blocked(epic, state, args, server, user, token):
     return action, "Blocked", to_state, f"Unblocked; {detail}"
 
 
-def _build_pr_body(template, epic, state):
-    """Fill a PR template with epic data, or build a default body."""
-    epic_id = epic["epic_id"]
-    strategy_key = epic.get("strategy_key", "")
-    title = epic.get("title", "Code generation")
-    scores = state.get("scores", {})
-    avg = scores.get("weighted_average", 0)
-    dims = scores.get("dimensions", {})
-
-    summary_lines = [
-        f"- {title}",
-        f"- Link: [{epic_id}]"
-        f"(https://redhat.atlassian.net/browse/{epic_id})",
-        f"- Strategy: [{strategy_key}]"
-        f"(https://redhat.atlassian.net/browse/{strategy_key})",
-    ]
-
-    if not template:
-        body = "## Summary\n\n" + "\n".join(summary_lines)
-        if avg:
-            body += f"\n\n## Review Scores ({avg:.1f}/10)\n\n"
-            body += "| Dimension | Score | Weight |\n"
-            body += "|-----------|-------|--------|\n"
-            for dim_name in ("architecture", "tests", "lint", "intent"):
-                d = dims.get(dim_name, {})
-                score = d.get("score", "?")
-                weight = d.get("weight", 0)
-                body += f"| {dim_name.title()} | {score}/10 " \
-                        f"| {int(weight * 100)}% |\n"
-        return body
-
-    import re as _re
-    lines = template.split("\n")
-    result = []
-    i = 0
-    filled_summary = False
-    while i < len(lines):
-        line = lines[i]
-        result.append(line)
-
-        if _re.match(r"^##\s+Summary", line, _re.IGNORECASE) \
-                and not filled_summary:
-            filled_summary = True
-            result.append("")
-            result.extend(summary_lines)
-
-        if _re.match(r"^##\s+Testing", line, _re.IGNORECASE):
-            result.append("")
-            result.append("Testing details:")
-            result.append(
-                f"- Review scores: {avg:.1f}/10 weighted average")
-            for dim_name in ("architecture", "tests", "lint", "intent"):
-                d = dims.get(dim_name, {})
-                score = d.get("score", "?")
-                result.append(f"- {dim_name.title()}: {score}/10")
-
-        i += 1
-
-    if not filled_summary:
-        result.insert(0, "## Summary\n")
-        result.insert(1, "\n".join(summary_lines) + "\n")
-
-    return "\n".join(result)
-
-
 def _create_pr_for_epic(epic, state, args):
     """Create a PR from fork to upstream for the epic's changes.
 
@@ -1500,19 +1434,18 @@ def _create_pr_for_epic(epic, state, args):
             print(f"  {epic_id}: push to fork failed", file=sys.stderr)
             return None
 
-        slug = target_repo.split("/")
-        if len(slug) != 2:
-            return None
-
-        gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
-        template = None
-        if gh_token:
-            template = github_utils.get_pr_template(
-                slug[0], slug[1], gh_token)
-            if template:
-                print(f"  {epic_id}: using repo PR template")
-
-        body = _build_pr_body(template, epic, state)
+        scores = state.get("scores", {})
+        avg = scores.get("weighted_average", 0)
+        dims = scores.get("dimensions", {})
+        body = f"## Summary\n\n"
+        body += f"- {epic.get('title', 'Code generation')}\n"
+        body += (f"- [{epic_id}]"
+                 f"(https://issues.redhat.com/browse/{epic_id})\n")
+        if avg:
+            body += f"\n**Review score: {avg:.1f}/10**\n"
+            for d in ("architecture", "tests", "lint", "intent"):
+                s = dims.get(d, {}).get("score", "?")
+                body += f"- {d.title()}: {s}/10\n"
 
         pr = create_pr(
             upstream=target_repo,
