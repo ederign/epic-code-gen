@@ -1150,9 +1150,12 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
                 unblocked_note = ""
                 if is_unblocked:
+                    parallel_note = ""
+                    if len(processed_actions) > 1:
+                        parallel_note = f" Code generated in parallel with {len(processed_actions) - 1} other epic{'s' if len(processed_actions) > 2 else ''} in this loop."
                     unblocked_note = f"""<div class="flex items-center gap-2 mb-3 px-3 py-2 bg-blue-900/20 border border-blue-700/30 rounded-lg">
                     <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                    <span class="text-xs text-blue-300">Dependencies resolved &mdash; unblocked and processed in this same loop.</span>
+                    <span class="text-xs text-blue-300">Dependencies resolved &mdash; unblocked and processed in this same loop.{parallel_note}</span>
                   </div>"""
 
                 iterations_note = ""
@@ -2218,6 +2221,38 @@ tailwind.config = {{
         <div class="space-y-3">
           {epic_timeline_blocks}
         </div>
+
+        <!-- What Happens Next -->
+        <div class="mt-6 bg-gradient-to-r from-cyan-900/20 to-blue-900/20 border border-cyan-700/30 rounded-xl p-5">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-8 h-8 rounded-full bg-cyan-900/50 border-2 border-cyan-500/50 flex items-center justify-center">
+              <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+            </div>
+            <div>
+              <h5 class="text-sm font-bold text-cyan-300">What Happens Next</h5>
+              <p class="text-[11px] text-slate-500">On the next scheduled pipeline run</p>
+            </div>
+          </div>
+          <div class="space-y-3 ml-11">
+            <div class="flex items-start gap-2">
+              <span class="mt-1 w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+              <p class="text-xs text-slate-300">The pipeline detects that <strong class="text-white">RHOAIENG-72531</strong> and <strong class="text-white">RHOAIENG-72532</strong> have open review comments from human engineers on their PRs.</p>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="mt-1 w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+              <p class="text-xs text-slate-300">A new agentic loop fires automatically &mdash; the agent reads each comment, understands the requested change, and pushes a fix commit to the PR.</p>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="mt-1 w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+              <p class="text-xs text-slate-300">The updated code goes through the same multi-dimensional AI review (architecture, tests, lint, intent) to verify quality before notifying the reviewer.</p>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="mt-1 w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+              <p class="text-xs text-slate-300">This loop continues autonomously &mdash; every review comment triggers a fix cycle &mdash; until the PR is approved and merged by a human engineer.</p>
+            </div>
+          </div>
+        </div>
+
       </div>
 
     </div>
