@@ -1,7 +1,7 @@
 CI_IMAGE ?= quay.io/ederignatowicz/epic-code-gen-ci
 CI_TAG ?= latest
 
-.PHONY: install test test-unit test-integration clean ci-image ci-image-push ci-image-tag story
+.PHONY: install test test-unit test-integration clean ci-image ci-image-push ci-image-tag
 
 install:
 	uv sync
@@ -13,13 +13,6 @@ test-unit:
 
 test-integration:
 	uv run pytest tests/ -m "integration" -v
-
-PIPELINE_DATA_DIR ?= ../epic-code-gen-pipeline-data
-
-story:
-	python3 ../epic-code-gen-dashboard/pipeline_story.py $(STRAT) \
-		--data-dir $(PIPELINE_DATA_DIR)/$(STRAT) \
-		--output-dir epic-reports
 
 clean:
 	rm -rf tmp/ .target-repo/ .context/
