@@ -1967,7 +1967,7 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase">Stage 1</span>
         <h3 class="text-xl font-bold text-white">Request for Enhancement</h3>
       </div>
-      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The What</span> — A customer or product manager submits a feature request (RFE). This is where the pipeline begins.</p>
+      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The What</span> — A customer or product manager submits a feature request (RFE), written with AI RFE skills. The RFE is then automatically reviewed and approved by AI agents. This is where the pipeline begins.</p>
 
       <div class="mb-4">
         <a href="https://redhat.atlassian.net/browse/RHAIRFE-2224" target="_blank"
