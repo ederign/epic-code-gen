@@ -751,30 +751,35 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                                "nodeStates": snap(), "glowEdges": glow,
                                "pulseNodes": [oa["epic"] for oa in other_actions]})
 
-                # Show PR opened for unblocked epics that reached PRCreated
+                # Show PR opened for unblocked epics that produced a PR
                 for oa in other_actions:
                     eid = oa["epic"]
                     ep_summary = epic_summary_by_id.get(eid, {})
                     final_status = ep_summary.get("status", "")
-                    if final_status == "PRCreated":
+                    has_pr = ep_summary.get("pr_url")
+                    if final_status in ("PRCreated", "Done", "completed") and has_pr:
                         node_states[eid] = {"state": "active", "label": "PR Opened"}
-                        meta_path = os.path.join(data_dir, eid, "run-metadata.yaml")
-                        meta_text = read_file(meta_path)
-                        versions = 1
-                        final_score = ""
-                        if meta_text:
-                            for line in meta_text.splitlines():
-                                if line.strip().startswith("versions:"):
-                                    try:
-                                        versions = int(line.split(":")[1].strip())
-                                    except (ValueError, IndexError):
-                                        pass
-                                if line.strip().startswith("final_score:"):
-                                    final_score = line.split(":")[1].strip()
-                        score_text = f", scores {final_score}/10" if final_score else ""
+                        versions = ep_summary.get("current_version", 1) or 1
+                        score_info = ep_summary.get("scores") or {}
+                        wavg = score_info.get("weighted_average", "")
+                        score_text = f", scores {wavg}/10" if wavg else ""
                         frames.append({"label": "PR Opened", "icon": "pr",
                                        "desc": f"AI completes {versions} iterations{score_text} — opens PR for {short}",
                                        "nodeStates": snap(), "glowEdges": glow, "pulseNodes": [eid]})
+            elif done_actions and not other_actions:
+                short = done_actions[0]["epic"].split("-")[-1]
+                frames.append({"label": "External Review", "icon": "review",
+                               "desc": f"AI agents (Copilot, CodeRabbit) and human engineers review {short}'s PR",
+                               "nodeStates": snap(), "glowEdges": [], "pulseNodes": []})
+                for da in done_actions:
+                    node_states[da["epic"]] = {"state": "done", "label": "Done"}
+                glow = []
+                for da in done_actions:
+                    glow.extend(edge_ids_for(da["epic"]))
+                frames.append({"label": "PR Merged", "icon": "merge",
+                               "desc": f"Human engineer approves — PR merged, {short} closed automatically",
+                               "nodeStates": snap(), "glowEdges": glow,
+                               "pulseNodes": [da["epic"] for da in done_actions]})
             else:
                 glow_edges = []
                 pulse_nodes = []
@@ -1298,7 +1303,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
         </details>"""
 
             has_prs = any(
-                a.get("to") == "PRCreated" for a in actions
+                a.get("to") in ("PRCreated", "ReviewPending") for a in actions
             )
             next_actions = (
                 run_log_entries[run_idx + 1].get("actions", [])
@@ -1323,7 +1328,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
                 pr_epic_ids = [
                     a.get("epic", "") for a in actions
-                    if a.get("to") == "PRCreated"
+                    if a.get("to") in ("PRCreated", "ReviewPending")
                 ]
                 pr_links = ""
                 for peid in pr_epic_ids:
@@ -1991,7 +1996,9 @@ tailwind.config = {{
         <span class="text-sm text-slate-500">&mdash; Epic Code Gen</span>
       </div>
       <p class="text-slate-400 mb-6">
-        The agent picks the next eligible epic from the queue and enters a <strong class="text-white">loop</strong>:
+        For this strategy, the agent produces <strong class="text-white">{len(epics)} PRs</strong> across
+        <strong class="text-white">{len(set(ep.get("target_repo","").split("/")[-1] for ep in epics if ep.get("target_repo")))} repositories</strong>.
+        It picks the next eligible epic from the queue and enters a <strong class="text-white">loop</strong>:
         generate code &rarr; self-review &rarr; open PR &rarr; human/agent review &rarr; fix &rarr; repeat until approved &rarr; merge &rarr; <strong class="text-white">next epic</strong>.
       </p>
 
