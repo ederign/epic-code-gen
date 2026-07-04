@@ -1953,7 +1953,7 @@ tailwind.config = {{
         </svg>
       </div>
       <h3 class="font-semibold text-sm text-white mb-1">Done</h3>
-      <p class="text-xs text-slate-500">PR &amp; Next Steps</p>
+      <p class="text-xs text-slate-500">Next Steps</p>
     </div>
 
   </div>
