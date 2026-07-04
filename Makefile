@@ -17,7 +17,7 @@ test-integration:
 PIPELINE_DATA_DIR ?= ../epic-code-gen-pipeline-data
 
 story:
-	python3 scripts/pipeline_story.py $(STRAT) \
+	python3 ../epic-code-gen-dashboard/pipeline_story.py $(STRAT) \
 		--data-dir $(PIPELINE_DATA_DIR)/$(STRAT) \
 		--output-dir epic-reports
 
