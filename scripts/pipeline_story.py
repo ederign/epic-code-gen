@@ -1368,6 +1368,58 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
 
     epic_timeline_blocks = build_run_timeline_blocks()
 
+    # --- Result section: per-epic status rows ---
+    result_rows = []
+    for ep in epics:
+        eid = ep["epic_id"]
+        short_id = eid.split("-")[-1]
+        status = ep.get("status", "")
+        pr_url = ep.get("pr_url")
+        pr_state = ep.get("pr_state", "")
+        scores = ep.get("scores")
+        target = ep.get("target_repo", "")
+        repo_name = target.split("/")[-1] if "/" in target else target
+        ep_title = epic_titles.get(eid, "")
+        short_title = ep_title[:40] + "..." if len(ep_title) > 40 else ep_title
+
+        if status in ("Done", "completed"):
+            dot = '<span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0"></span>'
+            badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400">Merged</span>'
+        elif status == "PRCreated":
+            dot = '<span class="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0"></span>'
+            badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400">PR Open</span>'
+        elif status == "Blocked":
+            dot = '<span class="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0"></span>'
+            badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400">Blocked</span>'
+        else:
+            dot = '<span class="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></span>'
+            badge = f'<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-500/20 text-slate-400">{escape(status)}</span>'
+
+        score_text = ""
+        if scores and isinstance(scores, dict):
+            wavg = scores.get("weighted_average")
+            if wavg is not None:
+                score_text = f'<span class="text-xs text-slate-500">Score: <span class="text-emerald-400 font-semibold">{wavg}/10</span></span>'
+
+        pr_link = ""
+        if pr_url:
+            pr_link = f'<a href="{escape(pr_url)}" target="_blank" class="text-xs text-blue-400 hover:text-blue-300 underline">View PR</a>'
+
+        result_rows.append(f"""<div class="bg-slate-800/40 border border-slate-700/50 rounded-lg px-4 py-3 flex items-center gap-3">
+          {dot}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-mono text-xs font-bold text-white">{escape(short_id)}</span>
+              {badge}
+              {score_text}
+              {pr_link}
+            </div>
+            <p class="text-xs text-slate-400 truncate mt-0.5">{escape(short_title)}</p>
+            <p class="text-[10px] text-slate-600 font-mono">{escape(repo_name)}</p>
+          </div>
+        </div>""")
+    result_epic_rows = "\n".join(result_rows)
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     page_html = f"""<!DOCTYPE html>
@@ -1571,18 +1623,17 @@ tailwind.config = {{
   }}
 </style>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen">
+<body class="bg-slate-950 text-slate-200 min-h-screen pb-16">
 
 <!-- ═══════════════ HERO HEADER ═══════════════ -->
 <header class="relative overflow-hidden border-b border-slate-800">
   <div class="absolute inset-0 bg-gradient-to-br from-blue-950/40 via-slate-950 to-emerald-950/20"></div>
   <div class="relative max-w-7xl mx-auto px-6 py-8">
     <div class="flex items-center gap-3 mb-2">
-      <div class="w-8 h-8 bg-red-600 rounded-sm flex items-center justify-center">
-        <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="currentColor">
-          <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.18L19.18 8 12 11.82 4.82 8 12 4.18z"/>
-        </svg>
-      </div>
+      <svg viewBox="85 27 162 120" class="w-7 h-7" xmlns="http://www.w3.org/2000/svg">
+        <path d="M213.80933,79.80915c.18919.87326.27015,1.76648.24107,2.65953,0,11.57128-14.08305,13.58536-23.80355,13.58536-37.83216,0-66.0527-23.51582-66.0527-30.68565-.02407-.50879.03369-1.01814.17108-1.50862l-2.85394,7.04541c-.77775,1.80227-1.1774,3.74495-1.17424,5.70787,0,14.08305,31.88322,35.36704,68.23009,35.36704,16.09714,0,28.32941-6.03448,28.32941-16.92922,0-.83985,0-1.50862-1.33754-7.87749l-1.74969-7.36424Z" fill="#1a1a1a"/>
+        <path d="M190.24685,96.05403c9.72049,0,23.80355-2.00631,23.80355-13.57758.02908-.89304-.05188-1.78627-.24107-2.65953l-5.79341-25.16441c-1.34531-5.53679-2.51177-8.04857-12.24005-12.90882-7.54311-3.86487-23.97463-10.23374-28.83487-10.23374-4.53364,0-5.8634,5.8634-11.22912,5.8634-5.19463,0-9.05172-4.35478-13.91197-4.35478-4.66584,0-7.71418,3.18055-10.06265,9.72049,0,0-6.53217,18.44561-7.37202,21.12069-.13739.49048-.19515.99983-.17108,1.50862,0,7.16984,28.22054,30.68566,66.0527,30.68566M215.55902,87.17339c1.33754,6.36887,1.33754,7.03764,1.33754,7.87749,0,10.88695-12.23227,16.92921-28.32941,16.92921-36.37798-.00777-68.23009-21.29177-68.23009-35.36704-.0021-1.9603.39753-3.90024,1.17423-5.7001-13.07212.661-30.00133,3.00947-30.00133,17.92459,0,24.48009,57.99636,54.6525,103.93152,54.6525,35.20374,0,44.08439-15.92605,44.08439-28.50049,0-9.89158-8.55403-21.12069-23.96684-27.82394" fill="#EE0000"/>
+      </svg>
       <span class="text-sm font-semibold text-red-400 tracking-wider uppercase">Red Hat AI</span>
     </div>
     <h1 class="text-3xl md:text-4xl font-bold text-white mb-2">
@@ -1769,7 +1820,7 @@ tailwind.config = {{
         </svg>
       </div>
       <h3 class="font-semibold text-sm text-white mb-1">RFE</h3>
-      <p class="text-xs text-slate-500">Customer Request</p>
+      <p class="text-xs text-slate-500">Customer/PM Feature Request</p>
     </div>
 
     <div class="stage-card bg-slate-900 border-2 border-slate-700 rounded-xl p-4 text-center" onclick="toggleStage('strategy')" id="card-strategy">
@@ -1823,7 +1874,7 @@ tailwind.config = {{
         <span class="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase">Stage 1</span>
         <h3 class="text-xl font-bold text-white">Request for Enhancement</h3>
       </div>
-      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The What</span> — A customer or product manager submits a feature request. This is where the pipeline begins.</p>
+      <p class="text-slate-400 mb-4"><span class="text-white font-semibold">The What</span> — A customer or product manager submits a feature request (RFE). This is where the pipeline begins.</p>
 
       <div class="mb-4">
         <a href="https://redhat.atlassian.net/browse/RHAIRFE-2224" target="_blank"
@@ -2085,40 +2136,37 @@ tailwind.config = {{
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
       <div class="flex items-center gap-3 mb-4">
         <span class="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase">Stage 5</span>
-        <h3 class="text-xl font-bold text-white">Result</h3>
+        <h3 class="text-xl font-bold text-white">Current Status</h3>
       </div>
 
-      <div class="grid md:grid-cols-3 gap-4 mb-6">
-        <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4 text-center">
-          <p class="text-3xl font-bold text-emerald-400">{len([e for e in epics if e.get('pr_url')])}</p>
-          <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">PRs Opened</p>
+      <div class="grid md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4 text-center">
+          <p class="text-3xl font-bold text-emerald-400">{len([e for e in epics if e.get('status') in ('Done', 'Closed', 'completed')])}</p>
+          <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Merged</p>
+        </div>
+        <div class="bg-slate-800/50 border border-blue-700/30 rounded-lg p-4 text-center">
+          <p class="text-3xl font-bold text-blue-400">{len([e for e in epics if e.get('status') == 'PRCreated'])}</p>
+          <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">PR Open</p>
+        </div>
+        <div class="bg-slate-800/50 border border-red-700/30 rounded-lg p-4 text-center">
+          <p class="text-3xl font-bold text-red-400">{len([e for e in epics if e.get('status') == 'Blocked'])}</p>
+          <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Blocked</p>
         </div>
         <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4 text-center">
-          <p class="text-3xl font-bold text-amber-400">{len([e for e in epics if e.get('status') == 'Blocked'])}</p>
-          <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Waiting on Dependencies</p>
-        </div>
-        <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-4 text-center">
-          <p class="text-3xl font-bold text-blue-400">{len(epics)}</p>
+          <p class="text-3xl font-bold text-slate-300">{len(epics)}</p>
           <p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Total Epics</p>
         </div>
       </div>
 
+      <div class="space-y-3 mb-6">
+        {result_epic_rows}
+      </div>
+
       <div class="bg-slate-800/30 border border-slate-700/50 rounded-lg p-4">
-        <h4 class="text-sm font-semibold text-slate-300 mb-2">What Happens Next</h4>
-        <ul class="space-y-2 text-sm text-slate-400">
-          <li class="flex items-start gap-2">
-            <svg class="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4"/></svg>
-            PR is reviewed and merged by human engineers
-          </li>
-          <li class="flex items-start gap-2">
-            <svg class="w-4 h-4 text-blue-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-            Once merged, dependent epics automatically unblock and the pipeline processes them
-          </li>
-          <li class="flex items-start gap-2">
-            <svg class="w-4 h-4 text-purple-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-            The pipeline converges over multiple runs until all epics have PRs
-          </li>
-        </ul>
+        <h4 class="text-sm font-semibold text-slate-300 mb-2">Planned</h4>
+        <p class="text-sm text-slate-400">
+          Once all {len(epics)} epic PRs are merged, the strategy closes in Jira. Build &amp; release integration is planned as the next pipeline stage &mdash; automated CI/CD from merged code to production.
+        </p>
       </div>
     </div>
   </div>
@@ -2126,14 +2174,13 @@ tailwind.config = {{
 </section>
 
 <!-- ═══════════════ FOOTER ═══════════════ -->
-<footer class="max-w-7xl mx-auto px-6 py-8 border-t border-slate-800">
-  <div class="flex items-center justify-between">
+<footer class="fixed bottom-0 left-0 right-0 bg-slate-950/90 backdrop-blur-sm border-t border-slate-800 z-50 px-6 py-3">
+  <div class="max-w-7xl mx-auto flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-6 h-6 bg-red-600 rounded-sm flex items-center justify-center">
-        <svg viewBox="0 0 24 24" class="w-4 h-4 text-white" fill="currentColor">
-          <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.18L19.18 8 12 11.82 4.82 8 12 4.18z"/>
-        </svg>
-      </div>
+      <svg viewBox="85 27 162 120" class="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
+        <path d="M213.80933,79.80915c.18919.87326.27015,1.76648.24107,2.65953,0,11.57128-14.08305,13.58536-23.80355,13.58536-37.83216,0-66.0527-23.51582-66.0527-30.68565-.02407-.50879.03369-1.01814.17108-1.50862l-2.85394,7.04541c-.77775,1.80227-1.1774,3.74495-1.17424,5.70787,0,14.08305,31.88322,35.36704,68.23009,35.36704,16.09714,0,28.32941-6.03448,28.32941-16.92922,0-.83985,0-1.50862-1.33754-7.87749l-1.74969-7.36424Z" fill="#1a1a1a"/>
+        <path d="M190.24685,96.05403c9.72049,0,23.80355-2.00631,23.80355-13.57758.02908-.89304-.05188-1.78627-.24107-2.65953l-5.79341-25.16441c-1.34531-5.53679-2.51177-8.04857-12.24005-12.90882-7.54311-3.86487-23.97463-10.23374-28.83487-10.23374-4.53364,0-5.8634,5.8634-11.22912,5.8634-5.19463,0-9.05172-4.35478-13.91197-4.35478-4.66584,0-7.71418,3.18055-10.06265,9.72049,0,0-6.53217,18.44561-7.37202,21.12069-.13739.49048-.19515.99983-.17108,1.50862,0,7.16984,28.22054,30.68566,66.0527,30.68566M215.55902,87.17339c1.33754,6.36887,1.33754,7.03764,1.33754,7.87749,0,10.88695-12.23227,16.92921-28.32941,16.92921-36.37798-.00777-68.23009-21.29177-68.23009-35.36704-.0021-1.9603.39753-3.90024,1.17423-5.7001-13.07212.661-30.00133,3.00947-30.00133,17.92459,0,24.48009,57.99636,54.6525,103.93152,54.6525,35.20374,0,44.08439-15.92605,44.08439-28.50049,0-9.89158-8.55403-21.12069-23.96684-27.82394" fill="#EE0000"/>
+      </svg>
       <span class="text-sm text-slate-500">Red Hat AI</span>
     </div>
     <span class="text-xs text-slate-600">Eder Ignatowicz &middot; {escape(timestamp)}</span>
