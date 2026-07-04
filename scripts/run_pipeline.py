@@ -581,6 +581,20 @@ def invoke_codegen(epic_id, args):
         return False
 
 
+def _detect_highest_version(epic_id, output_dir):
+    """Scan codegen artifacts for the highest version directory with scores."""
+    run_dir = os.path.join(output_dir, "codegen-runs", epic_id)
+    if not os.path.isdir(run_dir):
+        return 0
+    highest = 0
+    for entry in os.listdir(run_dir):
+        if entry.startswith("v") and entry[1:].isdigit():
+            v = int(entry[1:])
+            if v > highest:
+                highest = v
+    return highest
+
+
 def process_strategy(strategy_key, server, user, token, args):
     """Process one strategy: fetch epics, classify, run codegen on eligible.
 
@@ -1062,6 +1076,14 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
     success = invoke_codegen(epic_id, args)
+
+    # The codegen skill may iterate internally (v1→v2→...); sync version
+    actual_version = _detect_highest_version(epic_id, args.output_dir)
+    if actual_version > state["current_version"]:
+        print(f"  Version sync: skill iterated to v{actual_version} "
+              f"(state had v{state['current_version']})")
+        state["current_version"] = actual_version
+
     _copy_codegen_artifacts_to_data_repo(
         args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
     if success:
