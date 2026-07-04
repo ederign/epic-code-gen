@@ -2086,7 +2086,7 @@ tailwind.config = {{
       <p class="text-slate-400 mb-6">
         For this strategy, the agent produces <strong class="text-white">{len(epics)} PRs</strong> across
         <strong class="text-white">{len(set(ep.get("target_repo","").split("/")[-1] for ep in epics if ep.get("target_repo")))} repositories</strong>.
-        It picks the next eligible epic from the queue and enters a <strong class="text-white">loop</strong>:
+        It picks the next eligible epics from the queue and enters a <strong class="text-white">loop</strong>:
         generate code &rarr; self-review &rarr; open PR &rarr; human/agent review &rarr; fix &rarr; repeat until approved &rarr; merge &rarr; <strong class="text-white">next epic</strong>.
       </p>
 
