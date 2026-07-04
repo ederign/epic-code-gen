@@ -935,16 +935,16 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
             ts_raw = run.get("timestamp", "")
             ts_display = ts_raw[:19].replace("T", " ") + " UTC" if ts_raw else "Unknown"
             actions = run.get("actions", [])
-            processed = run.get("epics_processed", 0)
             blocked = run.get("epics_blocked", 0)
 
             processed_actions = [a for a in actions if a.get("to") not in ("Blocked",)]
+            processed = len(processed_actions)
             blocked_epics = [
                 eid for eid, ep in epic_summary_by_id.items()
                 if ep.get("status") == "Blocked"
             ]
 
-            is_open = "open" if run_idx == len(run_log_entries) - 1 else ""
+            is_open = ""
 
             run_content = ""
             is_fix_loop = any(
@@ -1336,8 +1336,96 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                     if purl:
                         pr_links += f' <a href="{escape(purl)}" target="_blank" class="font-mono text-xs text-purple-400 hover:text-purple-300">{escape(peid)}</a>'
 
+                # Build pending review block
+                if is_last_run:
+                    # Hardcoded review status for the two open PRs
+                    pr72531_screenshot = ""
+                    pr72531_path = os.path.join(screenshots_base, "PR RHOAIENG-72531.png")
+                    if os.path.exists(pr72531_path):
+                        rel72531 = os.path.relpath(pr72531_path, output_dir)
+                        pr72531_screenshot = f'<img src="{escape(rel72531)}" alt="PR for RHOAIENG-72531" class="rounded-lg border border-blue-700/30 max-w-full mt-2" />'
+
+                    pr72532_screenshot = ""
+                    pr72532_path = os.path.join(screenshots_base, "PR for RHOAIENG-72532.png")
+                    if os.path.exists(pr72532_path):
+                        rel72532 = os.path.relpath(pr72532_path, output_dir)
+                        pr72532_screenshot = f'<img src="{escape(rel72532)}" alt="PR for RHOAIENG-72532" class="rounded-lg border border-red-700/30 max-w-full mt-2" />'
+
+                    pending_review_block = f"""<div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4">
+              <div class="flex items-center gap-2 mb-3">
+                <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span class="text-sm text-amber-300 font-semibold">Pending external review</span>
+              </div>
+              <div class="flex items-start gap-3 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg mb-2">
+                <svg class="w-4 h-4 text-blue-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <a href="https://github.com/opendatahub-io/odh-dashboard/pull/8411" target="_blank" class="font-mono text-xs font-bold text-blue-400 hover:text-blue-300">RHOAIENG-72531</a>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400">In Review</span>
+                    <span class="text-[10px] text-slate-600 font-mono">odh-dashboard</span>
+                  </div>
+                  <p class="text-xs text-slate-400 mt-1">Awaiting review by human engineers.</p>
+                  {pr72531_screenshot}
+                </div>
+              </div>
+              <div class="flex items-start gap-3 p-3 bg-red-900/20 border border-red-700/30 rounded-lg mb-2">
+                <svg class="w-4 h-4 text-red-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <a href="https://github.com/opendatahub-io/mlflow/pull/326" target="_blank" class="font-mono text-xs font-bold text-blue-400 hover:text-blue-300">RHOAIENG-72532</a>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400">PR Temporarily Closed</span>
+                    <span class="text-[10px] text-slate-600 font-mono">mlflow</span>
+                  </div>
+                  <p class="text-xs text-slate-400 mt-1">PR temporarily closed &mdash; target repository is not yet AI-ready (missing CI configuration). Coordinating with maintainers to onboard the repo.</p>
+                  {pr72532_screenshot}
+                </div>
+              </div>
+              <p class="text-xs text-slate-500 mt-3 italic">The pipeline will pick up review feedback and act on it in the next agentic loop.</p>
+            </div>"""
+                else:
+                    pr_cards = ""
+                    for peid in pr_epic_ids:
+                        ep_info = epic_summary_by_id.get(peid, {})
+                        purl = ep_info.get("pr_url", "")
+                        pr_st = ep_info.get("pr_state", "open")
+                        repo = ep_info.get("target_repo", "")
+                        repo_name = repo.split("/")[-1] if "/" in repo else repo
+                        short = peid.split("-")[-1]
+                        if pr_st == "closed" and purl:
+                            pr_cards += f"""<div class="flex items-start gap-3 p-3 bg-red-900/20 border border-red-700/30 rounded-lg mb-2">
+                  <svg class="w-4 h-4 text-red-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <a href="{escape(purl)}" target="_blank" class="font-mono text-xs font-bold text-blue-400 hover:text-blue-300">{escape(short)}</a>
+                      <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400">PR Closed</span>
+                      <span class="text-[10px] text-slate-600 font-mono">{escape(repo_name)}</span>
+                    </div>
+                  </div>
+                </div>"""
+                        elif purl:
+                            pr_cards += f"""<div class="flex items-start gap-3 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg mb-2">
+                  <svg class="w-4 h-4 text-blue-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <a href="{escape(purl)}" target="_blank" class="font-mono text-xs font-bold text-blue-400 hover:text-blue-300">{escape(short)}</a>
+                      <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400">In Review</span>
+                      <span class="text-[10px] text-slate-600 font-mono">{escape(repo_name)}</span>
+                    </div>
+                  </div>
+                </div>"""
+
+                    pending_review_block = f"""<div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4">
+              <div class="flex items-center gap-2 mb-3">
+                <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span class="text-sm text-amber-300 font-semibold">Pending external review</span>
+              </div>
+              {pr_cards}
+              {review_screenshot}
+              <p class="text-xs text-slate-500 mt-3 italic">The pipeline will pick up review feedback and act on it in the next agentic loop.</p>
+            </div>"""
+
                 blocks += f"""
-        <details class="bg-purple-900/10 border border-purple-700/30 rounded-xl my-3 border-dashed overflow-hidden" {"open" if is_last_run or next_is_merge else ""}>
+        <details class="bg-purple-900/10 border border-purple-700/30 rounded-xl my-3 border-dashed overflow-hidden">
           <summary class="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-purple-900/20 transition-colors">
             <div class="w-10 h-10 rounded-full bg-purple-900/50 border-2 border-purple-500/50 flex items-center justify-center">
               <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1361,11 +1449,7 @@ def generate_pipeline_story(strat_key, data_dir, output_dir="epic-reports",
                 <span class="text-sm text-emerald-300 font-semibold">Changes from Agentic Loop {run_idx + 1} are human engineer approved and merged.</span>
                 {pr_links}
               </div>
-            </div>""" if next_is_merge else f"""<div class="bg-slate-900/50 border border-purple-700/20 rounded-lg p-4">
-              <p class="text-sm text-slate-400 mb-2">Open PRs from Loop {run_idx + 1} are being reviewed by external AI agents (<span class="text-purple-300 font-semibold">GitHub Copilot</span>, <span class="text-purple-300 font-semibold">CodeRabbit</span>) and human engineers.{pr_links}</p>
-              {review_screenshot}
-              <p class="text-xs text-slate-500 mt-3 italic">The pipeline will pick up review feedback and act on it in the next agentic loop.</p>
-            </div>"""}
+            </div>""" if next_is_merge else pending_review_block}
           </div>
         </details>"""
 
@@ -1469,8 +1553,9 @@ tailwind.config = {{
     opacity: 0;
   }}
   .detail-panel.open {{
-    max-height: 5000px;
+    max-height: none;
     opacity: 1;
+    overflow: visible;
   }}
 
   .connector {{
@@ -1628,7 +1713,7 @@ tailwind.config = {{
   }}
 </style>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen pb-16">
+<body class="bg-slate-950 text-slate-200 min-h-screen pb-24">
 
 <!-- ═══════════════ HERO HEADER ═══════════════ -->
 <header class="relative overflow-hidden border-b border-slate-800">
@@ -2225,10 +2310,6 @@ tailwind.config = {{
     card.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.2)';
     activeStage = stage;
 
-    // Smooth scroll to panel
-    setTimeout(() => {{
-      panel.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
-    }}, 100);
 
     if (stage === 'agentloop' && !dagAnimPlayed) {{
       setTimeout(() => playDagAnimation(), 700);
@@ -2326,7 +2407,7 @@ tailwind.config = {{
         entry.style.opacity = '1';
         entry.style.transform = 'translateY(0)';
       }});
-      entry.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+      log.scrollTop = log.scrollHeight;
     }}
   }}
 
