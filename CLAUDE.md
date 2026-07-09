@@ -251,8 +251,7 @@ Phase 4 — Iterate or Complete:
 ```
 
 Model selection: all agents run on opus (inherited from session). No model
-overrides during validation phase. Downgrade mechanical roles to sonnet later
-when optimizing cost.
+overrides — all subagents inherit the session model.
 
 All artifacts saved to `artifacts/codegen-runs/<EPIC_ID>/v<N>/`.
 State persisted via `tmp/epic-codegen-<EPIC_ID>.json` + SDD progress ledger.

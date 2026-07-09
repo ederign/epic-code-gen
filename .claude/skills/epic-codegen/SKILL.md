@@ -522,10 +522,6 @@ All agents run on the session model (no model overrides). The codegen plan
 contains a `## Model Override` section that instructs the SDD controller to
 skip its own model selection and inherit the session model for all subagents.
 
-When we move to cost optimization, downgrade mechanical roles (implementer,
-fix subagent) to sonnet first. Keep opus for judgment roles (orchestrator,
-reviewers) longest.
-
 ## Review Dimensions
 
 4 independent reviewer agents, each a standalone definition in `agents/`:
