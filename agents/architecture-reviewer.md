@@ -25,13 +25,21 @@ Read these files (do not ask for them inline):
 2. **Integration assessment:** does the new code integrate with the existing
    codebase without friction? Are the right abstractions used? Does it hook
    into existing patterns rather than creating parallel ones?
-3. **Separation of concerns:** does each new/modified file have one clear
+3. **Error path analysis:** for each new data-fetching, async operation, or
+   API call in the diff, trace the error/failure path. Flag as Critical any
+   pattern where a failure silently produces empty or default state with no
+   user feedback — these make features non-functional without any visible
+   indication. Examples: `catch(() => setState([]))`, `catch(() => {})`,
+   error paths that render nothing, `|| []` fallbacks that hide failures.
+   Every error path must either surface feedback to the user or propagate
+   the error to a handler that does.
+4. **Separation of concerns:** does each new/modified file have one clear
    responsibility? Are concerns mixed (e.g., business logic in a handler,
    data access in a utility)?
-4. **API surface:** if the diff adds or changes a public API (exported
+5. **API surface:** if the diff adds or changes a public API (exported
    functions, struct fields, interface methods), is the surface minimal and
    consistent with existing APIs in the repo?
-5. **Dependency direction:** does the new code depend on the right layers?
+6. **Dependency direction:** does the new code depend on the right layers?
    No circular imports, no reaching across package boundaries inappropriately.
 
 ## Scoring Guide
@@ -48,7 +56,7 @@ Read these files (do not ask for them inline):
 
 | Severity | Examples |
 |----------|----------|
-| Critical | Circular dependency introduced; exported function with wrong signature vs repo pattern; breaking change to public API |
+| Critical | Circular dependency introduced; exported function with wrong signature vs repo pattern; breaking change to public API; silent failure that makes a feature non-functional (catch swallows error, renders empty state, no error UI) |
 | Important | Convention violation from CLAUDE.md; parallel abstraction when existing one works; mixed concerns |
 | Minor | File in slightly wrong directory; naming preference (camelCase vs snake_case in non-Go repo) |
 

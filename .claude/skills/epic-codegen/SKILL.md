@@ -23,7 +23,7 @@ task-to-AC coverage check, review steering becomes weighted score aggregation.
 
 Parse `$ARGUMENTS` for:
 - `EPIC_ID` (required) — e.g., `RHAISTRAT-1749-E001`
-- `--max-iterations N` — default 3
+- `--max-iterations N` — default 5
 - `--dry-run` — produce diff but do not create PR
 - `--fork-owner USER` — GitHub username for fork remote (default: `dora-the-ai-coder`)
 - `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Required when `--fork-owner` is set. Enables: authenticated clone, fork creation, push to fork, PR creation.
@@ -82,7 +82,7 @@ python3 scripts/state.py init tmp/epic-codegen-${EPIC_ID}.json \
   version=0 \
   phase=init \
   status=running \
-  max_iterations=3
+  max_iterations=5
 ```
 
 Update epic-task status:
@@ -178,8 +178,16 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 <explicitly excluded to prevent scope creep>
 ```
 
-Auto-validate: every AC from the epic-task body has a corresponding Component.
-If any AC is unmapped, stop and report the gap.
+Auto-validate:
+1. Every AC from the epic-task body has a corresponding Component.
+   If any AC is unmapped, stop and report the gap.
+2. Every bullet in the epic's Scope section is either (a) reflected in a
+   Component's pass criteria, or (b) explicitly noted as a deviation in the
+   Design Decisions table with rationale. A design decision that contradicts
+   a Scope item without flagging it is an error — stop and report the
+   contradiction. The Scope section contains specific implementation
+   requirements (e.g., "radio button," "typeahead dropdown") that may be
+   more precise than the numbered ACs.
 
 ### Step 9: Write Codegen Plan
 
@@ -304,7 +312,6 @@ For each dimension (architecture, tests, lint, intent):
 ```
 Agent:
   description: "Review ${EPIC_ID} — ${DIMENSION}"
-  model: sonnet
   agentType: "${DIMENSION}-reviewer"
   prompt: |
     Review the code changes for ${EPIC_ID}.
@@ -410,7 +417,6 @@ Dispatch fix subagent:
 ```
 Agent:
   description: "Fix ${EPIC_ID} v${VERSION+1}"
-  model: sonnet
   prompt: |
     You are fixing review findings for epic ${EPIC_ID}.
 
