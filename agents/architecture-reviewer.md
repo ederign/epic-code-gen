@@ -1,6 +1,6 @@
 ---
 name: architecture-reviewer
-description: Reviews generated code for repo convention compliance, structural fit, and integration quality. Scores 1-10.
+description: Reviews generated code for repo convention compliance, structural fit, and integration quality.
 tools: Read, Glob, Grep
 ---
 
@@ -25,30 +25,28 @@ Read these files (do not ask for them inline):
 2. **Integration assessment:** does the new code integrate with the existing
    codebase without friction? Are the right abstractions used? Does it hook
    into existing patterns rather than creating parallel ones?
-3. **Separation of concerns:** does each new/modified file have one clear
+3. **Error path analysis:** for each new data-fetching, async operation, or
+   API call in the diff, trace the error/failure path. Flag as Critical any
+   pattern where a failure silently produces empty or default state with no
+   user feedback — these make features non-functional without any visible
+   indication. Examples: `catch(() => setState([]))`, `catch(() => {})`,
+   error paths that render nothing, `|| []` fallbacks that hide failures.
+   Every error path must either surface feedback to the user or propagate
+   the error to a handler that does.
+4. **Separation of concerns:** does each new/modified file have one clear
    responsibility? Are concerns mixed (e.g., business logic in a handler,
    data access in a utility)?
-4. **API surface:** if the diff adds or changes a public API (exported
+5. **API surface:** if the diff adds or changes a public API (exported
    functions, struct fields, interface methods), is the surface minimal and
    consistent with existing APIs in the repo?
-5. **Dependency direction:** does the new code depend on the right layers?
+6. **Dependency direction:** does the new code depend on the right layers?
    No circular imports, no reaching across package boundaries inappropriately.
-
-## Scoring Guide
-
-| Score | Criteria |
-|-------|----------|
-| 9-10 | Follows all repo conventions. Clean integration. Minimal API surface. Correct dependency direction. |
-| 7-8 | Follows most conventions. Minor integration friction. API surface reasonable. |
-| 5-6 | Some convention violations. Creates parallel patterns instead of reusing existing. API too broad. |
-| 3-4 | Multiple convention violations. Poor integration. Mixed concerns. |
-| 1-2 | Ignores repo conventions entirely. Disruptive architecture. |
 
 ## Calibration
 
 | Severity | Examples |
 |----------|----------|
-| Critical | Circular dependency introduced; exported function with wrong signature vs repo pattern; breaking change to public API |
+| Critical | Circular dependency introduced; exported function with wrong signature vs repo pattern; breaking change to public API; silent failure that makes a feature non-functional (catch swallows error, renders empty state, no error UI) |
 | Important | Convention violation from CLAUDE.md; parallel abstraction when existing one works; mixed concerns |
 | Minor | File in slightly wrong directory; naming preference (camelCase vs snake_case in non-Go repo) |
 
@@ -66,10 +64,6 @@ Read these files (do not ask for them inline):
 Write your review to `REVIEW_FILE` with this structure:
 
 ```
----
-score: N
----
-
 ### Convention Compliance
 
 [List conventions checked and pass/fail, citing CLAUDE.md section where relevant]
@@ -81,8 +75,17 @@ score: N
 ### Findings
 
 #### Critical
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Important
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Minor
 
-**Reasoning:** [1-2 sentences justifying the score]
+[Number each finding: 1. **Title**: description with file:line]
 ```
+
+Do NOT include a score in your output. Scores are computed deterministically
+from your findings by a separate script.

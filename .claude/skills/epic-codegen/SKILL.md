@@ -23,7 +23,7 @@ task-to-AC coverage check, review steering becomes weighted score aggregation.
 
 Parse `$ARGUMENTS` for:
 - `EPIC_ID` (required) — e.g., `RHAISTRAT-1749-E001`
-- `--max-iterations N` — default 3
+- `--max-iterations N` — default 5
 - `--dry-run` — produce diff but do not create PR
 - `--fork-owner USER` — GitHub username for fork remote (default: `dora-the-ai-coder`)
 - `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Required when `--fork-owner` is set. Enables: authenticated clone, fork creation, push to fork, PR creation.
@@ -82,7 +82,7 @@ python3 scripts/state.py init tmp/epic-codegen-${EPIC_ID}.json \
   version=0 \
   phase=init \
   status=running \
-  max_iterations=3
+  max_iterations=5
 ```
 
 Update epic-task status:
@@ -178,8 +178,16 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 <explicitly excluded to prevent scope creep>
 ```
 
-Auto-validate: every AC from the epic-task body has a corresponding Component.
-If any AC is unmapped, stop and report the gap.
+Auto-validate:
+1. Every AC from the epic-task body has a corresponding Component.
+   If any AC is unmapped, stop and report the gap.
+2. Every bullet in the epic's Scope section is either (a) reflected in a
+   Component's pass criteria, or (b) explicitly noted as a deviation in the
+   Design Decisions table with rationale. A design decision that contradicts
+   a Scope item without flagging it is an error — stop and report the
+   contradiction. The Scope section contains specific implementation
+   requirements (e.g., "radio button," "typeahead dropdown") that may be
+   more precise than the numbered ACs.
 
 ### Step 9: Write Codegen Plan
 
@@ -199,6 +207,13 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`:
 ## Global Constraints
 [From spec + target repo CLAUDE.md: version floors, naming rules, platform
 requirements, additive-only, no new dependencies, etc.]
+
+## Model Override
+
+All implementer and reviewer subagents MUST use the session's inherited model
+(do not specify a model override). The SDD Model Selection section does not
+apply to this plan — the calling skill requires all agents to run at the
+session's model tier.
 
 ---
 
@@ -266,6 +281,13 @@ runs its full pipeline:
 3. Updates progress ledger at `.target-repo/.superpowers/sdd/progress.md`
 4. Runs final whole-branch code review
 
+**Model override:** when SDD dispatches implementer or reviewer subagents, do
+NOT fill in the `[MODEL]` placeholder in the prompt templates. Leave it omitted
+so subagents inherit the session model. The SDD Model Selection section ("use
+the least powerful model") does not apply — this pipeline requires consistent
+model quality across all agents. The plan's `## Model Override` section
+reinforces this.
+
 **Override:** when SDD reaches `finishing-a-development-branch`, do NOT invoke
 that skill. Proceed directly to Step 13.
 
@@ -290,6 +312,31 @@ Update state:
 python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=review version=${VERSION}
 ```
 
+### Step 13.5: Verify Wiring
+
+Dispatch a wiring verification agent to trace execution paths for each AC.
+This catches broken chains (function defined but never called, handler not
+registered, state updated but never read) that code-reading reviewers miss.
+
+```
+Agent:
+  description: "Verify wiring ${EPIC_ID} v${VERSION}"
+  prompt: |
+    Verify that every AC has a complete, connected execution path from
+    trigger to outcome.
+
+    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
+    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-wiring.md
+```
+
+The wiring review is NOT a scored dimension — it does not affect the weighted
+average. Its findings are read during Step 17 (triage) and fed to the fix
+subagent alongside findings from the 4 scored reviewers.
+
+If the wiring verifier reports Critical findings, proceed to Step 14 normally.
+
 ## Phase 3: Multi-Dimensional Review
 
 ### Step 14: Dispatch 4 Reviewer Agents
@@ -304,7 +351,6 @@ For each dimension (architecture, tests, lint, intent):
 ```
 Agent:
   description: "Review ${EPIC_ID} — ${DIMENSION}"
-  model: sonnet
   agentType: "${DIMENSION}-reviewer"
   prompt: |
     Review the code changes for ${EPIC_ID}.
@@ -375,27 +421,31 @@ Read the scoring result:
 
 ### Step 17: Prepare Revision
 
-Read ALL reviewer feedback from files (do not paste into your context —
-Read the files):
+Read ALL reviewer and verifier feedback from files (do not paste into your
+context — Read the files):
 - `v${VERSION}/review-architecture.md`
 - `v${VERSION}/review-tests.md`
 - `v${VERSION}/review-lint.md`
 - `v${VERSION}/review-intent.md`
+- `v${VERSION}/review-wiring.md` (not scored, but findings go to fix subagent)
 
-Adjudicate findings (judgment — you stay at opus):
-- Real findings: confirmed issues that need fixing
-- False positives: reviewer misread the code or applied wrong criteria
-- Plan-mandated: finding conflicts with what plan requires — note for user
+Triage findings for the fix subagent. The script's scores and verdict are
+final — you cannot override them. Your job is to prioritize which findings
+the fix subagent should address:
 
-Prioritize real findings:
-1. Critical (blockers)
-2. Highest score-impact dimension first
-3. Quick wins
+1. Critical findings first (these cap the dimension score at 5)
+2. Important findings next (each costs 1.5 points)
+3. Minor findings last (each costs 0.5 points)
+
+For pre-existing issues outside the diff (e.g., lint failures in unrelated
+files), note them as "pre-existing — fix subagent should not attempt" so
+the fix agent doesn't waste time on them. These still count toward the
+score — the code must pass clean to score well.
 
 Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
-- Prioritized list of fixes
+- Prioritized list of findings to fix
 - For each: what to fix, why, which reviewer flagged it, file:line
-- Dismissed findings with reasoning
+- Pre-existing issues noted separately (not fixable by this pipeline)
 
 Increment version:
 ```bash
@@ -410,7 +460,6 @@ Dispatch fix subagent:
 ```
 Agent:
   description: "Fix ${EPIC_ID} v${VERSION+1}"
-  model: sonnet
   prompt: |
     You are fixing review findings for epic ${EPIC_ID}.
 
@@ -469,11 +518,9 @@ of all runs for dashboard consumption.
 
 ## Model Selection
 
-All agents run on opus (inherited from session model). No model overrides.
-
-When we move to cost optimization, downgrade mechanical roles (implementer,
-fix subagent) to sonnet first. Keep opus for judgment roles (orchestrator,
-reviewers) longest.
+All agents run on the session model (no model overrides). The codegen plan
+contains a `## Model Override` section that instructs the SDD controller to
+skip its own model selection and inherit the session model for all subagents.
 
 ## Review Dimensions
 
@@ -504,7 +551,8 @@ Artifacts are files. They never enter your context as inline text.
 | progress.md | SDD | SDD on resume |
 | diff.patch | Orchestrator (git diff) | All reviewer agents |
 | validation.json | validate_target.py | Lint reviewer agent |
-| review-*.md | Reviewer agents | Orchestrator (for adjudication only) |
+| review-{arch,tests,lint,intent}.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
+| review-wiring.md | Wiring verifier | Orchestrator (triage only, not scored) |
 | revision-notes.md | Orchestrator | Fix subagent |
 
 ## State Recovery
@@ -545,5 +593,5 @@ In all error cases: update state to `status=error`, update epic-task to
 - Sign off all commits: `git commit --signoff`
 - Never dispatch implementers in parallel (conflicts)
 - Never skip review — every version gets all 4 dimensions
-- Never dismiss a finding without stating the reasoning
+- Never override reviewer scores or the script's verdict
 - All agents inherit opus from session (no model overrides during validation)

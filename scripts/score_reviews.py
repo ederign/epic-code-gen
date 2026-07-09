@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Aggregate reviewer scores with weights and determine pass/fail.
+"""Aggregate reviewer findings with weights and determine pass/fail.
 
 Reads reviewer output files from a reviews directory. Each file must
-contain a YAML frontmatter block with a `score` field (1-10).
+contain structured findings sections (#### Critical, #### Important,
+#### Minor). Scores are computed deterministically from finding counts:
+
+    Score = max(1, 10 - 5*Criticals - 1.5*Importants - 0.5*Minors)
+
+Hard ceiling: any Critical finding caps the score at 5.
 
 Weights:
   architecture: 30%, tests: 30%, lint: 20%, intent: 20%
@@ -35,13 +40,20 @@ NEAR_MISS_THRESHOLD = 7.5
 MIN_DIMENSION_SCORE = 6.0
 HARD_FLOOR = 5.0
 
+CRITICAL_WEIGHT = 5.0
+IMPORTANT_WEIGHT = 1.5
+MINOR_WEIGHT = 0.5
+CRITICAL_CAP = 5.0
 
-def _parse_score_from_file(filepath):
-    """Extract dimension name and score from a review file.
+
+def _parse_findings_from_file(filepath):
+    """Extract dimension name and finding counts from a review file.
 
     Expects filename like review-tests.md, review-intent.md, etc.
-    Score extracted from YAML frontmatter `score: N` or from
-    a line matching `**Score:** N` or `Score: N/10`.
+    Counts findings under #### Critical, #### Important, #### Minor.
+
+    Returns (dimension, findings_dict) where findings_dict has keys:
+    critical, important, minor.
     """
     basename = os.path.basename(filepath)
     match = re.match(r"review-(\w+)\.md", basename)
@@ -56,40 +68,64 @@ def _parse_score_from_file(filepath):
     except (OSError, UnicodeDecodeError):
         return dimension, None
 
-    score = _extract_score(content)
-    return dimension, score
+    findings = _extract_findings(content)
+    return dimension, findings
 
 
-def _extract_score(content):
-    """Extract a numeric score from review content.
+def _extract_findings(content):
+    """Extract finding counts from review content.
 
-    Checks (in order):
-    1. YAML frontmatter: `score: N`
-    2. Markdown: `**Score:** N` or `**Score:** N/10`
-    3. Markdown: `Score: N` or `Score: N/10`
+    Parses the #### Critical, #### Important, #### Minor sections.
+    Counts numbered findings (lines starting with ``N. **``)
+    within each section.
+
+    Returns dict with critical, important, minor counts.
     """
-    frontmatter_match = re.search(
-        r"^---\s*\n(.*?)\n---", content, re.DOTALL)
-    if frontmatter_match:
-        fm = frontmatter_match.group(1)
-        score_match = re.search(r"^score:\s*(\d+(?:\.\d+)?)", fm, re.MULTILINE)
-        if score_match:
-            return float(score_match.group(1))
+    counts = {"critical": 0, "important": 0, "minor": 0}
 
-    patterns = [
-        r"\*\*Score:\*\*\s*(\d+(?:\.\d+)?)\s*(?:/\s*10)?",
-        r"Score:\s*(\d+(?:\.\d+)?)\s*(?:/\s*10)?",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, content)
-        if m:
-            return float(m.group(1))
+    current_severity = None
+    for line in content.split("\n"):
+        stripped = line.strip()
 
-    return None
+        heading_match = re.match(r"^#{1,4}\s+(.+)$", stripped)
+        if heading_match:
+            heading_text = heading_match.group(1).strip().lower()
+            if heading_text == "critical":
+                current_severity = "critical"
+            elif heading_text == "important":
+                current_severity = "important"
+            elif heading_text == "minor":
+                current_severity = "minor"
+            else:
+                current_severity = None
+            continue
+
+        if current_severity and re.match(r"^\d+\.\s+\*\*", stripped):
+            counts[current_severity] += 1
+
+    return counts
+
+
+def _compute_score(findings):
+    """Compute a deterministic score from finding counts.
+
+    Formula: max(1, 10 - 5*Criticals - 1.5*Importants - 0.5*Minors)
+    Hard ceiling: any Critical caps score at 5.
+    """
+    raw = (10.0
+           - CRITICAL_WEIGHT * findings["critical"]
+           - IMPORTANT_WEIGHT * findings["important"]
+           - MINOR_WEIGHT * findings["minor"])
+    score = max(1.0, raw)
+
+    if findings["critical"] > 0:
+        score = min(score, CRITICAL_CAP)
+
+    return round(score, 2)
 
 
 def score_reviews(reviews_dir):
-    """Read all review files and compute aggregate scores.
+    """Read all review files and compute aggregate scores from findings.
 
     Args:
         reviews_dir: directory containing review-*.md files
@@ -113,18 +149,20 @@ def score_reviews(reviews_dir):
         if not filename.startswith("review-") or not filename.endswith(".md"):
             continue
         filepath = os.path.join(reviews_dir, filename)
-        dimension, score = _parse_score_from_file(filepath)
+        dimension, findings = _parse_findings_from_file(filepath)
         if dimension is None:
             continue
-        if score is None:
-            result["errors"].append(f"Could not extract score from {filename}")
+        if findings is None:
+            result["errors"].append(f"Could not read {filename}")
             continue
         if dimension in DIMENSION_WEIGHTS:
+            score = _compute_score(findings)
             result["dimensions"][dimension] = {
                 "score": score,
                 "weight": DIMENSION_WEIGHTS[dimension],
-                "weighted": score * DIMENSION_WEIGHTS[dimension],
+                "weighted": round(score * DIMENSION_WEIGHTS[dimension], 2),
                 "file": filename,
+                "findings": findings,
             }
 
     for dim in DIMENSION_WEIGHTS:
@@ -140,7 +178,6 @@ def score_reviews(reviews_dir):
     )
     result["weighted_average"] = round(weighted_avg, 2)
 
-    scores = [d["score"] for d in result["dimensions"].values()]
     below_floor = [d for d, info in result["dimensions"].items()
                    if info["score"] < HARD_FLOOR]
     below_min = [d for d, info in result["dimensions"].items()
@@ -173,18 +210,22 @@ def format_report(result):
         lines.extend([
             "## Dimension Scores",
             "",
-            "| Dimension | Score | Weight | Weighted |",
-            "|-----------|-------|--------|----------|",
+            "| Dimension | Score | Findings (C/I/M) | Weight | Weighted |",
+            "|-----------|-------|-------------------|--------|----------|",
         ])
         for dim in DIMENSION_WEIGHTS:
             if dim in result["dimensions"]:
                 info = result["dimensions"][dim]
+                f = info.get("findings", {})
+                findings_str = (f"{f.get('critical', 0)}/"
+                                f"{f.get('important', 0)}/"
+                                f"{f.get('minor', 0)}")
                 lines.append(
-                    f"| {dim} | {info['score']:.1f} | "
+                    f"| {dim} | {info['score']:.1f} | {findings_str} | "
                     f"{info['weight']:.0%} | {info['weighted']:.2f} |"
                 )
             else:
-                lines.append(f"| {dim} | MISSING | — | — |")
+                lines.append(f"| {dim} | MISSING | — | — | — |")
 
     if result["missing"]:
         lines.extend([
@@ -203,7 +244,7 @@ def format_report(result):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Aggregate reviewer scores with weights")
+        description="Aggregate reviewer findings with weights")
     parser.add_argument("reviews_dir", help="Directory with review-*.md files")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON")
