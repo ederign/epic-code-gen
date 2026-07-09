@@ -32,6 +32,10 @@ Read these files (do not ask for them inline):
 
 ## Scoring Guide
 
+**Hard ceiling: any Critical finding caps the score at 5.** This is
+non-negotiable — a Critical means test coverage has a gap that could
+allow broken code to pass.
+
 | Score | Criteria |
 |-------|----------|
 | 9-10 | Every AC has a covering test. Edge cases tested. Assertions verify real behavior. No gaps. |

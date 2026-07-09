@@ -59,6 +59,10 @@ missed or altered an AC, that is a Critical finding.
 
 ## Scoring Guide
 
+**Hard ceiling: any Critical finding caps the score at 5.** This is
+non-negotiable — a Critical means the feature is broken or deviates from
+the epic in a way that must be fixed before merge.
+
 | Score | Criteria |
 |-------|----------|
 | 9-10 | Every AC fully implemented. ALL spec pass criteria verified. Scope section requirements matched. No extra scope. Semantics match intent exactly. |

@@ -32,6 +32,10 @@ Read these files (do not ask for them inline):
 
 ## Scoring Guide
 
+**Hard ceiling: any Critical finding caps the score at 5.** This is
+non-negotiable — a Critical means the code fails mechanical checks that
+must pass before merge.
+
 | Score | Criteria |
 |-------|----------|
 | 9-10 | All lint/typecheck/build pass. Code is clean, consistent, well-structured. No dead code. |

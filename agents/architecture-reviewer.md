@@ -44,6 +44,10 @@ Read these files (do not ask for them inline):
 
 ## Scoring Guide
 
+**Hard ceiling: any Critical finding caps the score at 5.** This is
+non-negotiable — a Critical means the code has a structural defect that
+must be fixed before merge.
+
 | Score | Criteria |
 |-------|----------|
 | 9-10 | Follows all repo conventions. Clean integration. Minimal API surface. Correct dependency direction. |
