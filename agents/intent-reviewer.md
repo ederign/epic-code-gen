@@ -29,9 +29,14 @@ missed or altered an AC, that is a Critical finding.
 2. **Pass criteria verification:** for each Component in the spec, verify
    every pass criterion against the diff. A pass criterion states "X appears
    as Y" or "selecting X renders Y" — verify X actually IS Y in the code,
-   not just that X exists somewhere. Mark each criterion as Verified or Failed
-   with file:line evidence. This is the primary verification — AC-to-diff
-   mapping alone is insufficient.
+   not just that X exists somewhere. For criteria involving rendering or
+   user-visible behavior, trace the full data flow: what populates the data,
+   what conditions gate the render, and what happens on each error path. If
+   the data depends on an async call, verify BOTH success and failure paths
+   produce behavior consistent with the criterion — a failure path that
+   silently empties the data means the criterion fails. Mark each criterion
+   as Verified or Failed with file:line evidence. This is the primary
+   verification — AC-to-diff mapping alone is insufficient.
 3. **Scope fidelity check:** read the epic's **Scope** section (the bulleted
    list of changes, not just the numbered ACs). The Scope section contains
    specific implementation requirements that the numbered ACs may state more
