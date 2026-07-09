@@ -208,6 +208,13 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`:
 [From spec + target repo CLAUDE.md: version floors, naming rules, platform
 requirements, additive-only, no new dependencies, etc.]
 
+## Model Override
+
+All implementer and reviewer subagents MUST use the session's inherited model
+(do not specify a model override). The SDD Model Selection section does not
+apply to this plan — the calling skill requires all agents to run at the
+session's model tier.
+
 ---
 
 ### Task 1: <description>
@@ -274,6 +281,13 @@ runs its full pipeline:
 3. Updates progress ledger at `.target-repo/.superpowers/sdd/progress.md`
 4. Runs final whole-branch code review
 
+**Model override:** when SDD dispatches implementer or reviewer subagents, do
+NOT fill in the `[MODEL]` placeholder in the prompt templates. Leave it omitted
+so subagents inherit the session model. The SDD Model Selection section ("use
+the least powerful model") does not apply — this pipeline requires consistent
+model quality across all agents. The plan's `## Model Override` section
+reinforces this.
+
 **Override:** when SDD reaches `finishing-a-development-branch`, do NOT invoke
 that skill. Proceed directly to Step 13.
 
@@ -297,6 +311,31 @@ Update state:
 ```bash
 python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=review version=${VERSION}
 ```
+
+### Step 13.5: Verify Wiring
+
+Dispatch a wiring verification agent to trace execution paths for each AC.
+This catches broken chains (function defined but never called, handler not
+registered, state updated but never read) that code-reading reviewers miss.
+
+```
+Agent:
+  description: "Verify wiring ${EPIC_ID} v${VERSION}"
+  prompt: |
+    Verify that every AC has a complete, connected execution path from
+    trigger to outcome.
+
+    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
+    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-wiring.md
+```
+
+The wiring review is NOT a scored dimension — it does not affect the weighted
+average. Its findings are read during Step 17 (triage) and fed to the fix
+subagent alongside findings from the 4 scored reviewers.
+
+If the wiring verifier reports Critical findings, proceed to Step 14 normally.
 
 ## Phase 3: Multi-Dimensional Review
 
@@ -382,12 +421,13 @@ Read the scoring result:
 
 ### Step 17: Prepare Revision
 
-Read ALL reviewer feedback from files (do not paste into your context —
-Read the files):
+Read ALL reviewer and verifier feedback from files (do not paste into your
+context — Read the files):
 - `v${VERSION}/review-architecture.md`
 - `v${VERSION}/review-tests.md`
 - `v${VERSION}/review-lint.md`
 - `v${VERSION}/review-intent.md`
+- `v${VERSION}/review-wiring.md` (not scored, but findings go to fix subagent)
 
 Triage findings for the fix subagent. The script's scores and verdict are
 final — you cannot override them. Your job is to prioritize which findings
@@ -478,7 +518,9 @@ of all runs for dashboard consumption.
 
 ## Model Selection
 
-All agents run on opus (inherited from session model). No model overrides.
+All agents run on the session model (no model overrides). The codegen plan
+contains a `## Model Override` section that instructs the SDD controller to
+skip its own model selection and inherit the session model for all subagents.
 
 When we move to cost optimization, downgrade mechanical roles (implementer,
 fix subagent) to sonnet first. Keep opus for judgment roles (orchestrator,
@@ -513,7 +555,8 @@ Artifacts are files. They never enter your context as inline text.
 | progress.md | SDD | SDD on resume |
 | diff.patch | Orchestrator (git diff) | All reviewer agents |
 | validation.json | validate_target.py | Lint reviewer agent |
-| review-*.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
+| review-{arch,tests,lint,intent}.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
+| review-wiring.md | Wiring verifier | Orchestrator (triage only, not scored) |
 | revision-notes.md | Orchestrator | Fix subagent |
 
 ## State Recovery

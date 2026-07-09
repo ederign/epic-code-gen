@@ -240,13 +240,14 @@ Phase 2 — Subagent-Driven Development (Superpowers SDD):
   8. Save version artifacts (diff, validation)
 
 Phase 3 — Multi-Dimensional Review:
-  9. Dispatch 4 reviewer agents in parallel
+  9. Dispatch 4 reviewer agents + wiring verifier in parallel
   10. Compute scores from findings (deterministic)
+  11. Wiring verifier traces trigger→chain→outcome per AC (not scored, informs triage)
 
 Phase 4 — Iterate or Complete:
-  11. Pass (>=8.0): save final diff
-  12. Fail: triage findings, write revision notes, re-dispatch fix agent
-  13. Exhausted: report best version
+  12. Pass (>=8.0): save final diff
+  13. Fail: triage findings (including wiring), write revision notes, re-dispatch fix agent
+  14. Exhausted: report best version
 ```
 
 Model selection: all agents run on opus (inherited from session). No model
