@@ -1,6 +1,6 @@
 ---
 name: lint-reviewer
-description: Reviews code quality — lint/typecheck/build pass, style consistency, error handling, dead code. Scores 1-10.
+description: Reviews code quality — lint/typecheck/build pass, style consistency, error handling, dead code.
 tools: Read, Glob, Grep
 ---
 
@@ -30,20 +30,6 @@ Read these files (do not ask for them inline):
 5. **Dead code:** does the diff introduce unreachable code, unused imports,
    unused variables, or commented-out code?
 
-## Scoring Guide
-
-**Hard ceiling: any Critical finding caps the score at 5.** This is
-non-negotiable — a Critical means the code fails mechanical checks that
-must pass before merge.
-
-| Score | Criteria |
-|-------|----------|
-| 9-10 | All lint/typecheck/build pass. Code is clean, consistent, well-structured. No dead code. |
-| 7-8 | Lint passes. Minor style inconsistencies. Trivial dead code (one unused import). |
-| 5-6 | Lint passes with warnings. Some style issues. Error handling exists but weak. |
-| 3-4 | Lint or typecheck fails. Multiple style violations. Errors swallowed or poorly handled. |
-| 1-2 | Build fails. Major quality issues throughout. |
-
 ## Calibration
 
 | Severity | Examples |
@@ -66,10 +52,6 @@ must pass before merge.
 Write your review to `REVIEW_FILE` with this structure:
 
 ```
----
-score: N
----
-
 ### Validation Results
 
 | Check | Status | Notes |
@@ -81,8 +63,17 @@ score: N
 ### Code Quality Findings
 
 #### Critical
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Important
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Minor
 
-**Reasoning:** [1-2 sentences justifying the score]
+[Number each finding: 1. **Title**: description with file:line]
 ```
+
+Do NOT include a score in your output. Scores are computed deterministically
+from your findings by a separate script.

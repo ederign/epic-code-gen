@@ -189,18 +189,22 @@ Called automatically at the end of every `/epic-codegen` run.
 
 ## Review Score Aggregation
 
-Aggregate reviewer scores with weights and determine pass/fail:
+Compute scores deterministically from reviewer findings and determine pass/fail:
 
 ```bash
 python3 scripts/score_reviews.py <reviews-dir> [--json]
 ```
 
+Scores are computed from structured findings, not chosen by reviewers:
+`Score = max(1, 10 - 5*Criticals - 1.5*Importants - 0.5*Minors)`.
+Any Critical finding caps the dimension score at 5.
+
 Weights: architecture 30%, tests 30%, lint 20%, intent 20%.
 Verdict: pass (>=8.0, no dim <6.0), near-miss (>=7.5), fail, incomplete.
 
 Reviewer agents live in `agents/` — one per dimension. Each is a standalone
-agent definition (assess-strat pattern) with frontmatter, scoring criteria
-(1-10), calibration tables, and output format.
+agent definition with calibration tables and structured output format.
+Reviewers classify findings by severity; they do not set scores.
 
 ## Superpowers Integration
 
@@ -236,12 +240,12 @@ Phase 2 — Subagent-Driven Development (Superpowers SDD):
   8. Save version artifacts (diff, validation)
 
 Phase 3 — Multi-Dimensional Review:
-  9. Dispatch 4 reviewer agents in parallel (model: sonnet)
-  10. Aggregate weighted scores
+  9. Dispatch 4 reviewer agents in parallel
+  10. Compute scores from findings (deterministic)
 
 Phase 4 — Iterate or Complete:
   11. Pass (>=8.0): save final diff
-  12. Fail: adjudicate findings, write revision notes, re-dispatch fix agent
+  12. Fail: triage findings, write revision notes, re-dispatch fix agent
   13. Exhausted: report best version
 ```
 

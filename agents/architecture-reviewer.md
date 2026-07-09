@@ -1,6 +1,6 @@
 ---
 name: architecture-reviewer
-description: Reviews generated code for repo convention compliance, structural fit, and integration quality. Scores 1-10.
+description: Reviews generated code for repo convention compliance, structural fit, and integration quality.
 tools: Read, Glob, Grep
 ---
 
@@ -42,20 +42,6 @@ Read these files (do not ask for them inline):
 6. **Dependency direction:** does the new code depend on the right layers?
    No circular imports, no reaching across package boundaries inappropriately.
 
-## Scoring Guide
-
-**Hard ceiling: any Critical finding caps the score at 5.** This is
-non-negotiable — a Critical means the code has a structural defect that
-must be fixed before merge.
-
-| Score | Criteria |
-|-------|----------|
-| 9-10 | Follows all repo conventions. Clean integration. Minimal API surface. Correct dependency direction. |
-| 7-8 | Follows most conventions. Minor integration friction. API surface reasonable. |
-| 5-6 | Some convention violations. Creates parallel patterns instead of reusing existing. API too broad. |
-| 3-4 | Multiple convention violations. Poor integration. Mixed concerns. |
-| 1-2 | Ignores repo conventions entirely. Disruptive architecture. |
-
 ## Calibration
 
 | Severity | Examples |
@@ -78,10 +64,6 @@ must be fixed before merge.
 Write your review to `REVIEW_FILE` with this structure:
 
 ```
----
-score: N
----
-
 ### Convention Compliance
 
 [List conventions checked and pass/fail, citing CLAUDE.md section where relevant]
@@ -93,8 +75,17 @@ score: N
 ### Findings
 
 #### Critical
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Important
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Minor
 
-**Reasoning:** [1-2 sentences justifying the score]
+[Number each finding: 1. **Title**: description with file:line]
 ```
+
+Do NOT include a score in your output. Scores are computed deterministically
+from your findings by a separate script.

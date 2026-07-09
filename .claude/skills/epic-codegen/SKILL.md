@@ -389,20 +389,23 @@ Read the files):
 - `v${VERSION}/review-lint.md`
 - `v${VERSION}/review-intent.md`
 
-Adjudicate findings (judgment — you stay at opus):
-- Real findings: confirmed issues that need fixing
-- False positives: reviewer misread the code or applied wrong criteria
-- Plan-mandated: finding conflicts with what plan requires — note for user
+Triage findings for the fix subagent. The script's scores and verdict are
+final — you cannot override them. Your job is to prioritize which findings
+the fix subagent should address:
 
-Prioritize real findings:
-1. Critical (blockers)
-2. Highest score-impact dimension first
-3. Quick wins
+1. Critical findings first (these cap the dimension score at 5)
+2. Important findings next (each costs 1.5 points)
+3. Minor findings last (each costs 0.5 points)
+
+For pre-existing issues outside the diff (e.g., lint failures in unrelated
+files), note them as "pre-existing — fix subagent should not attempt" so
+the fix agent doesn't waste time on them. These still count toward the
+score — the code must pass clean to score well.
 
 Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
-- Prioritized list of fixes
+- Prioritized list of findings to fix
 - For each: what to fix, why, which reviewer flagged it, file:line
-- Dismissed findings with reasoning
+- Pre-existing issues noted separately (not fixable by this pipeline)
 
 Increment version:
 ```bash
@@ -510,7 +513,7 @@ Artifacts are files. They never enter your context as inline text.
 | progress.md | SDD | SDD on resume |
 | diff.patch | Orchestrator (git diff) | All reviewer agents |
 | validation.json | validate_target.py | Lint reviewer agent |
-| review-*.md | Reviewer agents | Orchestrator (for adjudication only) |
+| review-*.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
 | revision-notes.md | Orchestrator | Fix subagent |
 
 ## State Recovery
@@ -551,5 +554,5 @@ In all error cases: update state to `status=error`, update epic-task to
 - Sign off all commits: `git commit --signoff`
 - Never dispatch implementers in parallel (conflicts)
 - Never skip review — every version gets all 4 dimensions
-- Never dismiss a finding without stating the reasoning
+- Never override reviewer scores or the script's verdict
 - All agents inherit opus from session (no model overrides during validation)

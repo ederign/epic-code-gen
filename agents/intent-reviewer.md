@@ -1,6 +1,6 @@
 ---
 name: intent-reviewer
-description: Reviews whether generated code matches epic acceptance criteria — nothing missing, nothing extra. Scores 1-10.
+description: Reviews whether generated code matches epic acceptance criteria — nothing missing, nothing extra.
 tools: Read, Glob, Grep
 ---
 
@@ -57,20 +57,6 @@ missed or altered an AC, that is a Critical finding.
 7. **Behavioral completeness:** does the diff handle both the happy path AND
    the stated error/nil behavior for each AC?
 
-## Scoring Guide
-
-**Hard ceiling: any Critical finding caps the score at 5.** This is
-non-negotiable — a Critical means the feature is broken or deviates from
-the epic in a way that must be fixed before merge.
-
-| Score | Criteria |
-|-------|----------|
-| 9-10 | Every AC fully implemented. ALL spec pass criteria verified. Scope section requirements matched. No extra scope. Semantics match intent exactly. |
-| 7-8 | All ACs addressed. Most pass criteria verified. Minor semantic mismatches or trivial extra code. |
-| 5-6 | One AC partially implemented or misunderstood. Pass criteria failures. Some scope creep. |
-| 3-4 | Multiple ACs missing or wrong. Significant scope creep or wrong problem solved. |
-| 1-2 | Diff does not address the epic's intent. |
-
 ## Calibration
 
 | Severity | Examples |
@@ -94,10 +80,6 @@ the epic in a way that must be fixed before merge.
 Write your review to `REVIEW_FILE` with this structure:
 
 ```
----
-score: N
----
-
 ### AC-to-Diff Mapping
 
 | AC | Diff Location | Status |
@@ -125,8 +107,17 @@ For each spec Component, verify every pass criterion:
 ### Findings
 
 #### Critical
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Important
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Minor
 
-**Reasoning:** [1-2 sentences justifying the score]
+[Number each finding: 1. **Title**: description with file:line]
 ```
+
+Do NOT include a score in your output. Scores are computed deterministically
+from your findings by a separate script.

@@ -11,8 +11,9 @@ sys.path.insert(0, sys_path_fix)
 from score_reviews import (
     score_reviews,
     format_report,
-    _extract_score,
-    _parse_score_from_file,
+    _extract_findings,
+    _compute_score,
+    _parse_findings_from_file,
     DIMENSION_WEIGHTS,
 )
 
@@ -23,86 +24,248 @@ def _write(path, content):
         f.write(content)
 
 
-def _write_review(reviews_dir, dimension, score, body="Review content."):
-    """Write a review file with the given score."""
-    content = f"""---
-score: {score}
----
+def _write_review(reviews_dir, dimension, criticals=0, importants=0, minors=0,
+                  extra_body=""):
+    """Write a review file with structured findings."""
+    critical_items = "\n".join(
+        f'{i+1}. **Finding C{i+1}**: description' for i in range(criticals)
+    ) if criticals else "None identified."
 
-# {dimension.title()} Review
+    important_items = "\n".join(
+        f'{i+1}. **Finding I{i+1}**: description' for i in range(importants)
+    ) if importants else "None identified."
 
-{body}
+    minor_items = "\n".join(
+        f'{i+1}. **Finding M{i+1}**: description' for i in range(minors)
+    ) if minors else "None identified."
 
-**Score:** {score}/10
+    content = f"""### {dimension.title()} Review
+
+{extra_body}
+
+### Findings
+
+#### Critical
+
+{critical_items}
+
+#### Important
+
+{important_items}
+
+#### Minor
+
+{minor_items}
 """
     _write(os.path.join(reviews_dir, f"review-{dimension}.md"), content)
 
 
-def _write_all_reviews(reviews_dir, scores):
-    """Write review files for all dimensions."""
-    for dim, score in scores.items():
-        _write_review(reviews_dir, dim, score)
+def _write_all_reviews(reviews_dir, findings_map):
+    """Write review files for all dimensions.
+
+    findings_map: dict of dimension -> (criticals, importants, minors)
+    """
+    for dim, counts in findings_map.items():
+        _write_review(reviews_dir, dim, *counts)
 
 
-# ─── Score Extraction ────────────────────────────────────────────────────────
+# ─── Finding Extraction ────────────────────────────────────────────────────
 
-class TestExtractScore:
+class TestExtractFindings:
 
-    def test_from_frontmatter(self):
-        content = "---\nscore: 8\n---\nBody"
-        assert _extract_score(content) == 8.0
+    def test_no_findings(self):
+        content = """### Findings
 
-    def test_from_frontmatter_float(self):
-        content = "---\nscore: 7.5\n---\nBody"
-        assert _extract_score(content) == 7.5
+#### Critical
 
-    def test_from_bold_markdown(self):
-        content = "# Review\n\n**Score:** 9/10\n"
-        assert _extract_score(content) == 9.0
+None identified.
 
-    def test_from_plain_markdown(self):
-        content = "# Review\n\nScore: 7\n"
-        assert _extract_score(content) == 7.0
+#### Important
 
-    def test_from_bold_no_slash(self):
-        content = "**Score:** 6"
-        assert _extract_score(content) == 6.0
+None identified.
 
-    def test_no_score(self):
-        content = "# Review\n\nNo score here.\n"
-        assert _extract_score(content) is None
+#### Minor
 
-    def test_frontmatter_takes_precedence(self):
-        content = "---\nscore: 8\n---\n**Score:** 5/10"
-        assert _extract_score(content) == 8.0
+None identified.
+"""
+        findings = _extract_findings(content)
+        assert findings == {"critical": 0, "important": 0, "minor": 0}
+
+    def test_one_critical(self):
+        content = """### Findings
+
+#### Critical
+
+1. **Broken API**: The endpoint returns 500
+
+#### Important
+
+None.
+
+#### Minor
+
+None.
+"""
+        findings = _extract_findings(content)
+        assert findings["critical"] == 1
+        assert findings["important"] == 0
+        assert findings["minor"] == 0
+
+    def test_multiple_findings(self):
+        content = """### Findings
+
+#### Critical
+
+1. **Bug one**: description
+2. **Bug two**: description
+
+#### Important
+
+1. **Warning one**: description
+
+#### Minor
+
+1. **Nit one**: description
+2. **Nit two**: description
+3. **Nit three**: description
+"""
+        findings = _extract_findings(content)
+        assert findings["critical"] == 2
+        assert findings["important"] == 1
+        assert findings["minor"] == 3
+
+    def test_only_counts_numbered_bold_items(self):
+        content = """#### Critical
+
+Some preamble text that isn't a finding.
+
+1. **Real finding**: this counts
+
+A paragraph between findings.
+
+2. **Another finding**: this also counts
+
+But this plain text does not count.
+"""
+        findings = _extract_findings(content)
+        assert findings["critical"] == 2
+
+    def test_stops_at_next_section(self):
+        content = """#### Critical
+
+1. **Finding**: description
+
+#### Important
+
+1. **Other finding**: description
+
+### Reasoning
+
+Score: 5/10 — this should not be counted as a finding.
+"""
+        findings = _extract_findings(content)
+        assert findings["critical"] == 1
+        assert findings["important"] == 1
+
+    def test_handles_code_quality_subsection(self):
+        content = """### Code Quality Findings
+
+#### Critical
+
+1. **Validation failures**: lint fails
+
+#### Important
+
+None.
+
+#### Minor
+
+1. **Commented code**: file:123
+"""
+        findings = _extract_findings(content)
+        assert findings["critical"] == 1
+        assert findings["minor"] == 1
 
 
-# ─── Parse Score From File ───────────────────────────────────────────────────
+# ─── Score Computation ──────────────────────────────────────────────────────
 
-class TestParseScoreFromFile:
+class TestComputeScore:
+
+    def test_no_findings_is_10(self):
+        assert _compute_score({"critical": 0, "important": 0, "minor": 0}) == 10.0
+
+    def test_one_critical_caps_at_5(self):
+        score = _compute_score({"critical": 1, "important": 0, "minor": 0})
+        assert score == 5.0
+
+    def test_two_criticals_floor_at_1(self):
+        score = _compute_score({"critical": 2, "important": 0, "minor": 0})
+        assert score == 1.0
+
+    def test_three_minors(self):
+        score = _compute_score({"critical": 0, "important": 0, "minor": 3})
+        assert score == 8.5
+
+    def test_two_importants_one_minor(self):
+        score = _compute_score({"critical": 0, "important": 2, "minor": 1})
+        assert score == 6.5
+
+    def test_one_critical_one_important(self):
+        score = _compute_score({"critical": 1, "important": 1, "minor": 0})
+        assert score == 3.5
+
+    def test_floor_at_1(self):
+        score = _compute_score({"critical": 3, "important": 5, "minor": 10})
+        assert score == 1.0
+
+    def test_critical_cap_applied_after_formula(self):
+        # 1 critical + 0 others: raw = 10-5 = 5, cap = 5 → 5
+        score = _compute_score({"critical": 1, "important": 0, "minor": 0})
+        assert score == 5.0
+        # 1 critical + 2 importants: raw = 10-5-3 = 2, cap would be 5 but raw is lower
+        score = _compute_score({"critical": 1, "important": 2, "minor": 0})
+        assert score == 2.0
+
+
+# ─── Parse Findings From File ──────────────────────────────────────────────
+
+class TestParseFindingsFromFile:
 
     def test_valid_review_file(self, tmp_path):
         filepath = str(tmp_path / "review-tests.md")
-        _write(filepath, "---\nscore: 9\n---\nContent")
-        dim, score = _parse_score_from_file(filepath)
+        _write(filepath, """### Findings
+
+#### Critical
+
+1. **Missing test**: AC3 has no test
+
+#### Important
+
+None.
+
+#### Minor
+
+None.
+""")
+        dim, findings = _parse_findings_from_file(filepath)
         assert dim == "tests"
-        assert score == 9.0
+        assert findings["critical"] == 1
 
     def test_invalid_filename(self, tmp_path):
         filepath = str(tmp_path / "notes.md")
-        _write(filepath, "---\nscore: 9\n---\n")
-        dim, score = _parse_score_from_file(filepath)
+        _write(filepath, "content")
+        dim, findings = _parse_findings_from_file(filepath)
         assert dim is None
 
-    def test_no_score_in_content(self, tmp_path):
+    def test_no_findings_sections(self, tmp_path):
         filepath = str(tmp_path / "review-lint.md")
-        _write(filepath, "No frontmatter, no score.")
-        dim, score = _parse_score_from_file(filepath)
+        _write(filepath, "No structured findings here.")
+        dim, findings = _parse_findings_from_file(filepath)
         assert dim == "lint"
-        assert score is None
+        assert findings == {"critical": 0, "important": 0, "minor": 0}
 
 
-# ─── Score Reviews ───────────────────────────────────────────────────────────
+# ─── Score Reviews ──────────────────────────────────────────────────────────
 
 class TestScoreReviews:
 
@@ -110,45 +273,71 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "pass"
-        assert result["weighted_average"] >= 8.0
+        assert result["weighted_average"] == 10.0
         assert len(result["missing"]) == 0
 
-    def test_fail_low_average(self, tmp_path):
+    def test_fail_with_criticals(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 5, "tests": 5, "lint": 5, "intent": 5,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (1, 0, 0),
+            "intent": (2, 1, 0),
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "fail"
+        # lint: 1 critical → 5, intent: 2 criticals → 1
+        assert result["dimensions"]["lint"]["score"] == 5.0
+        assert result["dimensions"]["intent"]["score"] == 1.0
 
     def test_fail_dimension_below_floor(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 9, "tests": 9, "lint": 4, "intent": 9,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (1, 0, 0),  # score = 5, capped → below HARD_FLOOR
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
-        assert result["verdict"] == "fail"
+        # lint score = 5.0, which is >= HARD_FLOOR (5.0)
+        # but below MIN_DIMENSION_SCORE (6.0)
+        # weighted avg = 10*0.3 + 10*0.3 + 5*0.2 + 10*0.2 = 9.0
+        assert result["dimensions"]["lint"]["score"] == 5.0
+        # Below MIN but above HARD_FLOOR, avg >= 7.5, one dim 5.0-5.9
+        assert result["verdict"] == "near-miss"
 
     def test_near_miss(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
+        # All clean except one dimension with minor findings
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 8, "lint": 5.5, "intent": 8,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 9),  # 10 - 4.5 = 5.5
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
+        assert result["dimensions"]["lint"]["score"] == 5.5
+        # weighted avg = 10*0.3 + 10*0.3 + 5.5*0.2 + 10*0.2 = 9.1
+        assert result["weighted_average"] >= 7.5
         assert result["verdict"] == "near-miss"
 
     def test_missing_dimension(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 9, "tests": 9, "lint": 8,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "incomplete"
@@ -162,7 +351,10 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 10, "tests": 10, "lint": 10, "intent": 10,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
         assert result["weighted_average"] == 10.0
@@ -174,34 +366,68 @@ class TestScoreReviews:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
         })
         _write(os.path.join(reviews_dir, "notes.md"), "Not a review")
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "pass"
 
-    def test_error_on_unparseable_score(self, tmp_path):
+    def test_findings_included_in_output(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
+            "architecture": (0, 1, 2),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (1, 0, 0),
         })
-        _write(os.path.join(reviews_dir, "review-tests.md"), "No score here")
         result = score_reviews(reviews_dir)
-        assert len(result["errors"]) > 0
+        assert result["dimensions"]["architecture"]["findings"] == {
+            "critical": 0, "important": 1, "minor": 2,
+        }
+        assert result["dimensions"]["intent"]["findings"]["critical"] == 1
 
     def test_pass_threshold_boundary(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
+        # All 10s → weighted avg = 10.0
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 8, "lint": 8, "intent": 8,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
         assert result["verdict"] == "pass"
-        assert result["weighted_average"] == 8.0
+        assert result["weighted_average"] == 10.0
+
+    def test_mixed_findings_score(self, tmp_path):
+        reviews_dir = str(tmp_path / "reviews")
+        os.makedirs(reviews_dir)
+        # arch: 0C 2I 1M → 10-3-0.5 = 6.5
+        # tests: 0C 0I 3M → 10-1.5 = 8.5
+        # lint: 0C 0I 0M → 10
+        # intent: 0C 1I 0M → 10-1.5 = 8.5
+        _write_all_reviews(reviews_dir, {
+            "architecture": (0, 2, 1),
+            "tests": (0, 0, 3),
+            "lint": (0, 0, 0),
+            "intent": (0, 1, 0),
+        })
+        result = score_reviews(reviews_dir)
+        assert result["dimensions"]["architecture"]["score"] == 6.5
+        assert result["dimensions"]["tests"]["score"] == 8.5
+        assert result["dimensions"]["lint"]["score"] == 10.0
+        assert result["dimensions"]["intent"]["score"] == 8.5
+        # weighted: 6.5*0.3 + 8.5*0.3 + 10*0.2 + 8.5*0.2 = 1.95+2.55+2.0+1.7 = 8.2
+        assert result["weighted_average"] == 8.2
+        assert result["verdict"] == "pass"
 
 
-# ─── Format Report ───────────────────────────────────────────────────────────
+# ─── Format Report ──────────────────────────────────────────────────────────
 
 class TestFormatReport:
 
@@ -209,18 +435,35 @@ class TestFormatReport:
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
         _write_all_reviews(reviews_dir, {
-            "architecture": 8, "tests": 9, "lint": 8, "intent": 9,
+            "architecture": (0, 0, 0),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
         })
         result = score_reviews(reviews_dir)
         report = format_report(result)
         assert "PASS" in report
         assert "tests" in report
+        assert "Findings (C/I/M)" in report
 
     def test_format_missing(self, tmp_path):
         reviews_dir = str(tmp_path / "reviews")
         os.makedirs(reviews_dir)
-        _write_all_reviews(reviews_dir, {"tests": 9})
+        _write_all_reviews(reviews_dir, {"tests": (0, 0, 0)})
         result = score_reviews(reviews_dir)
         report = format_report(result)
         assert "MISSING" in report
         assert "INCOMPLETE" in report
+
+    def test_format_shows_finding_counts(self, tmp_path):
+        reviews_dir = str(tmp_path / "reviews")
+        os.makedirs(reviews_dir)
+        _write_all_reviews(reviews_dir, {
+            "architecture": (1, 2, 3),
+            "tests": (0, 0, 0),
+            "lint": (0, 0, 0),
+            "intent": (0, 0, 0),
+        })
+        result = score_reviews(reviews_dir)
+        report = format_report(result)
+        assert "1/2/3" in report

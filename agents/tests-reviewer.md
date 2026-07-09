@@ -1,6 +1,6 @@
 ---
 name: tests-reviewer
-description: Reviews test quality for generated code — AC coverage, edge cases, TDD evidence, assertion quality. Scores 1-10.
+description: Reviews test quality for generated code — AC coverage, edge cases, TDD evidence, assertion quality.
 tools: Read, Glob, Grep
 ---
 
@@ -30,20 +30,6 @@ Read these files (do not ask for them inline):
 5. **Regression risk:** does the diff modify existing behavior? If so, are
    existing tests updated to match?
 
-## Scoring Guide
-
-**Hard ceiling: any Critical finding caps the score at 5.** This is
-non-negotiable — a Critical means test coverage has a gap that could
-allow broken code to pass.
-
-| Score | Criteria |
-|-------|----------|
-| 9-10 | Every AC has a covering test. Edge cases tested. Assertions verify real behavior. No gaps. |
-| 7-8 | Most ACs covered. Minor edge case gaps. Tests are meaningful. |
-| 5-6 | Some ACs missing tests. Tests exist but weak assertions or missing edge cases. |
-| 3-4 | Multiple ACs untested. Tests test mocked behavior or assert trivially. |
-| 1-2 | No meaningful tests, or tests that pass regardless of implementation. |
-
 ## Calibration
 
 | Severity | Examples |
@@ -64,10 +50,6 @@ allow broken code to pass.
 Write your review to `REVIEW_FILE` with this structure:
 
 ```
----
-score: N
----
-
 ### AC Coverage
 
 | AC | Test | file:line | Covered? |
@@ -80,8 +62,17 @@ score: N
 ### Findings
 
 #### Critical
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Important
+
+[Number each finding: 1. **Title**: description with file:line]
+
 #### Minor
 
-**Reasoning:** [1-2 sentences justifying the score]
+[Number each finding: 1. **Title**: description with file:line]
 ```
+
+Do NOT include a score in your output. Scores are computed deterministically
+from your findings by a separate script.
