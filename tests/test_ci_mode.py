@@ -191,6 +191,49 @@ class TestCIStateMachine:
         os.remove(os.path.join(scores_dir, "scores.json"))
         os.removedirs(scores_dir)
 
+    def test_review_pending_near_miss_exhausted_attempts_pr(self, tmp_path,
+                                                             monkeypatch):
+        """Near-miss verdict when exhausted should attempt PR creation."""
+        epic = _epic("E001")
+        state = {"status": "ReviewPending", "current_version": 3,
+                 "max_iterations": 3}
+
+        scores_dir = os.path.join("artifacts", "codegen-runs", "E001", "v3")
+        os.makedirs(scores_dir, exist_ok=True)
+        with open(os.path.join(scores_dir, "scores.json"), "w") as f:
+            json.dump({
+                "weighted_average": 7.2,
+                "verdict": "near-miss",
+                "dimensions": {
+                    "architecture": {"score": 6.5},
+                    "tests": {"score": 6.5},
+                    "lint": {"score": 8.0},
+                    "intent": {"score": 8.5},
+                },
+            }, f)
+
+        pr_created = []
+
+        def fake_create_pr(ep, st, args):
+            pr_created.append(ep["epic_id"])
+            return "https://github.com/org/repo/pull/99"
+
+        monkeypatch.setattr(
+            "run_pipeline._create_pr_for_epic", fake_create_pr)
+
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "PRCreated"
+        assert "Near-miss" in detail
+        assert pr_created == ["E001"]
+
+        os.remove(os.path.join(scores_dir, "scores.json"))
+        os.removedirs(scores_dir)
+
     def test_review_pending_skips_without_scores(self, tmp_path):
         epic = _epic("E001")
         state = {"status": "ReviewPending", "current_version": 1}
@@ -287,15 +330,15 @@ class TestCIStateMachine:
         assert to_s == "Failed"
         assert "Exhausted" in detail
 
-    def test_init_state_has_max_iterations_5(self, tmp_path):
-        """V2: default max_iterations should be 5."""
+    def test_init_state_has_max_iterations_10(self, tmp_path):
+        """Default max_iterations should be 10."""
         epic = _epic("E001")
         args = _args(tmp_path)
 
         ci_process_epic(epic, None, args, "srv", "usr", "tok")
 
         state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
-        assert state["max_iterations"] == 5
+        assert state["max_iterations"] == 10
 
     def test_pr_changes_skips_without_pr_url(self, tmp_path, monkeypatch):
         monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "fake-token")

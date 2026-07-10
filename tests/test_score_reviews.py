@@ -328,7 +328,26 @@ class TestScoreReviews:
         result = score_reviews(reviews_dir)
         assert result["dimensions"]["lint"]["score"] == 5.5
         # weighted avg = 10*0.3 + 10*0.3 + 5.5*0.2 + 10*0.2 = 9.1
-        assert result["weighted_average"] >= 7.5
+        assert result["weighted_average"] >= 7.0
+        assert result["verdict"] == "near-miss"
+
+    def test_near_miss_low_range(self, tmp_path):
+        reviews_dir = str(tmp_path / "reviews")
+        os.makedirs(reviews_dir)
+        # Multiple dimensions with findings, avg lands in 7.0-7.4 range
+        # arch: 0C 2I 1M → 6.5, tests: 0C 2I 1M → 6.5
+        # lint: 0C 0I 4M → 8.0, intent: 0C 1I 0M → 8.5
+        _write_all_reviews(reviews_dir, {
+            "architecture": (0, 2, 1),
+            "tests": (0, 2, 1),
+            "lint": (0, 0, 4),
+            "intent": (0, 1, 0),
+        })
+        result = score_reviews(reviews_dir)
+        assert result["dimensions"]["architecture"]["score"] == 6.5
+        assert result["dimensions"]["tests"]["score"] == 6.5
+        # weighted avg = 6.5*0.3 + 6.5*0.3 + 8.0*0.2 + 8.5*0.2 = 7.2
+        assert result["weighted_average"] == 7.2
         assert result["verdict"] == "near-miss"
 
     def test_missing_dimension(self, tmp_path):

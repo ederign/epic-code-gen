@@ -402,11 +402,28 @@ Read the scoring result:
   Update epic-task: `pr_url=<html_url from result>`
 - Report success with scores and PR URL
 
-**near-miss** (weighted avg >= 7.5, at most one dimension 5.0-5.9):
+**near-miss** (weighted avg >= 7.0, at most one dimension 5.0-5.9):
 - Treat same as fail — iterate to fix
 
 **fail** and version < max_iterations:
 - Proceed to Step 17 (revision)
+
+**near-miss** and version >= max_iterations:
+- Find best version (highest weighted average across all versions)
+- If best version verdict is **near-miss**: push and create PR with a note
+  that human review is needed on code quality findings:
+  ```bash
+  python3 scripts/push_to_fork.py .target-repo/ epic/${EPIC_ID} --json
+  python3 scripts/create_pr.py <upstream_slug> <fork_owner> epic/${EPIC_ID} \
+      --title "${EPIC_ID}: <epic title>" \
+      --body "<scores summary + note: near-miss after N iterations, human review needed>" \
+      --gh-token-var EPIC_CODEGEN_GITHUB_TOKEN --json
+  ```
+  Before pushing, check out the best version's code:
+  `git -C .target-repo/ reset --hard <best-version-sha>`
+  Save best diff as `best-diff.patch` and `final-diff.patch`
+  Update state: `status=completed`
+  Update epic-task: `status=Generated pr_url=<html_url>`
 
 **fail** and version >= max_iterations:
 - **DO NOT push code or create a PR. Failed code must not be published.**
@@ -430,9 +447,23 @@ context — Read the files):
 - `v${VERSION}/review-intent.md`
 - `v${VERSION}/review-wiring.md` (not scored, but findings go to fix subagent)
 
-Triage findings for the fix subagent. The script's scores and verdict are
-final — you cannot override them. Your job is to prioritize which findings
-the fix subagent should address:
+**Oscillation detection:** If VERSION > 2, also read the revision-notes from
+prior versions (`v1/revision-notes.md` through `v${VERSION-1}/revision-notes.md`).
+Compare each current finding against prior versions' findings. A finding is
+**oscillating** if:
+- It was fixed in a prior version (appeared in vN revision-notes, absent in
+  vN+1 reviews) but reappeared in a later version, OR
+- Fixing it in a prior version caused a contradicting finding in a different
+  reviewer dimension (e.g., architecture said "centralize X" → lint said
+  "duplicate computation of X" after the centralization was done)
+
+Mark oscillating findings as **skip — oscillating** in the revision notes.
+The fix subagent must not touch these areas — fixing them will recreate the
+opposite finding. Focus remaining fix effort on non-oscillating findings.
+
+Triage non-oscillating findings for the fix subagent. The script's scores
+and verdict are final — you cannot override them. Your job is to prioritize
+which findings the fix subagent should address:
 
 1. Critical findings first (these cap the dimension score at 5)
 2. Important findings next (each costs 1.5 points)
@@ -444,7 +475,8 @@ the fix agent doesn't waste time on them. These still count toward the
 score — the code must pass clean to score well.
 
 Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
-- Prioritized list of findings to fix
+- Oscillating findings (skip — do not fix)
+- Prioritized list of non-oscillating findings to fix
 - For each: what to fix, why, which reviewer flagged it, file:line
 - Pre-existing issues noted separately (not fixable by this pipeline)
 
@@ -595,5 +627,5 @@ In all error cases: update state to `status=error`, update epic-task to
 - Never dispatch implementers in parallel (conflicts)
 - Never skip review — every version gets all 4 dimensions
 - Never override reviewer scores or the script's verdict
-- Never push code or create a PR unless the verdict is **pass**
+- Never push code or create a PR unless the verdict is **pass** or **near-miss** (near-miss only when iterations are exhausted)
 - All agents inherit opus from session (no model overrides during validation)

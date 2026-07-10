@@ -1163,6 +1163,23 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
 
     max_iter = state.get("max_iterations", 3)
     if version >= max_iter:
+        verdict = scores.get("verdict", "fail")
+        if verdict == "near-miss":
+            pr_url = _create_pr_for_epic(epic, state, args)
+            if pr_url:
+                state["status"] = "PRCreated"
+                state["pr_url"] = pr_url
+                state["pr_state"] = "open"
+                state.setdefault("timestamps", {})["pr_created"] = \
+                    datetime.now(timezone.utc).isoformat()
+                save_epic_state(
+                    args.data_repo, epic["strategy_key"], epic_id, state)
+
+                transition_issue(server, user, token, epic_id, "Review")
+                link_pr_to_jira(server, user, token, epic_id, pr_url)
+                return PROCESSED, "ReviewPending", "PRCreated", \
+                    f"Near-miss PR created (avg={avg:.1f})"
+
         state["status"] = "Failed"
         state["failure_reason"] = \
             f"Exhausted {max_iter} iterations (avg={avg:.1f})"
