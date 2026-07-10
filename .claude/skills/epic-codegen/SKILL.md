@@ -409,6 +409,7 @@ Read the scoring result:
 - Proceed to Step 17 (revision)
 
 **fail** and version >= max_iterations:
+- **DO NOT push code or create a PR. Failed code must not be published.**
 - Find best version (highest weighted average across all versions)
 - Save best diff as `best-diff.patch`
 - Update state: `status=exhausted`
@@ -594,4 +595,5 @@ In all error cases: update state to `status=error`, update epic-task to
 - Never dispatch implementers in parallel (conflicts)
 - Never skip review — every version gets all 4 dimensions
 - Never override reviewer scores or the script's verdict
+- Never push code or create a PR unless the verdict is **pass**
 - All agents inherit opus from session (no model overrides during validation)
