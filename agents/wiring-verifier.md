@@ -57,7 +57,12 @@ For each AC in the epic:
 - Do not mutate the working tree, index, or HEAD.
 - Trace through existing code (outside the diff) when the chain crosses into
   it — you need to verify the handoff points, not just the new code.
-- Cite file:line for every link in every chain.
+- Cite file:line for every link in every chain. Line numbers MUST come from
+  the actual source file, NOT from the patch file's own sequential numbering.
+  Read the actual source file in `.target-repo/` to verify the line number
+  before citing it. The diff's hunk headers (`@@ -old,len +new,len @@`) show
+  the real source positions — use those to navigate, then confirm by reading
+  the file.
 - When a chain involves async operations (promises, callbacks, event loops,
   message queues), verify the async handoff is correct — the consumer must
   handle the async result, not just fire-and-forget.

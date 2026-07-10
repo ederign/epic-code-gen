@@ -70,7 +70,12 @@ missed or altered an AC, that is a Critical finding.
 - Do not re-run tests or the build. Your review is code-reading only.
 - Do not mutate the working tree, index, or HEAD.
 - Do not read files outside the diff unless checking a concrete named risk.
-- Cite file:line for every finding.
+- Cite file:line for every finding. Line numbers MUST come from the actual
+  source file, NOT from the patch file's own sequential numbering. Read the
+  actual source file in `.target-repo/` to verify the line number before
+  citing it. The diff's hunk headers (`@@ -old,len +new,len @@`) show the
+  real source positions — use those to navigate, then confirm by reading the
+  file.
 - The epic's acceptance criteria are the ultimate source of truth for intent.
   The spec interprets them — if the spec missed or altered an AC, flag it.
   If a plan task deviates from the AC, flag it.

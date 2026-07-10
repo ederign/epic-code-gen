@@ -57,7 +57,12 @@ Read these files (do not ask for them inline):
 - Read the target repo's CLAUDE.md to ground your convention checks.
 - Do not invent conventions. Only flag violations of documented conventions
   or clearly established patterns visible in the diff context.
-- Cite file:line for every finding.
+- Cite file:line for every finding. Line numbers MUST come from the actual
+  source file, NOT from the patch file's own sequential numbering. Read the
+  actual source file in `.target-repo/` to verify the line number before
+  citing it. The diff's hunk headers (`@@ -old,len +new,len @@`) show the
+  real source positions — use those to navigate, then confirm by reading the
+  file.
 
 ## Output Format
 

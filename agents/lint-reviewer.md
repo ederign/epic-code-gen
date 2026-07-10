@@ -43,7 +43,12 @@ Read these files (do not ask for them inline):
 - Do not re-run lint, typecheck, or build. Read the validation output file.
 - Do not mutate the working tree, index, or HEAD.
 - Do not read files outside the diff unless checking a concrete named risk.
-- Cite file:line for every finding.
+- Cite file:line for every finding. Line numbers MUST come from the actual
+  source file, NOT from the patch file's own sequential numbering. Read the
+  actual source file in `.target-repo/` to verify the line number before
+  citing it. The diff's hunk headers (`@@ -old,len +new,len @@`) show the
+  real source positions — use those to navigate, then confirm by reading the
+  file.
 - If the validation output file is missing, report that as Critical and score
   based on code-reading alone.
 
