@@ -19,7 +19,7 @@ Usage:
     python3 scripts/run_pipeline.py RHAISTRAT-1699 --ci --data-repo /path/to/data-repo
 
     # With codegen options
-    python3 scripts/run_pipeline.py RHAISTRAT-1699 --max-iterations 5 --fork-owner dora-the-ai-coder
+    python3 scripts/run_pipeline.py RHAISTRAT-1699 --max-iterations 10 --fork-owner dora-the-ai-coder
 """
 
 import argparse
@@ -1028,7 +1028,7 @@ def _init_epic_state(epic):
         "target_repo": epic.get("target_repo", ""),
         "target_branch": epic.get("target_branch", ""),
         "current_version": 0,
-        "max_iterations": 5,
+        "max_iterations": 10,
         "timestamps": {"created": now},
     }
 
@@ -1266,7 +1266,7 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         return PROCESSED, "PRChangesRequested", "PRChangesRequested", \
             "dry-run: would invoke review response"
 
-    max_iter = state.get("max_iterations", 5)
+    max_iter = state.get("max_iterations", 10)
     version = state.get("current_version", 1)
     if version >= max_iter:
         state["status"] = "Failed"

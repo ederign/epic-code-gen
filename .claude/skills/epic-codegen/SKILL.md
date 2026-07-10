@@ -23,7 +23,7 @@ task-to-AC coverage check, review steering becomes weighted score aggregation.
 
 Parse `$ARGUMENTS` for:
 - `EPIC_ID` (required) — e.g., `RHAISTRAT-1749-E001`
-- `--max-iterations N` — default 5
+- `--max-iterations N` — default 10
 - `--dry-run` — produce diff but do not create PR
 - `--fork-owner USER` — GitHub username for fork remote (default: `dora-the-ai-coder`)
 - `--gh-token-var VARNAME` — env var holding GitHub token (default: `EPIC_CODEGEN_GITHUB_TOKEN`). Required when `--fork-owner` is set. Enables: authenticated clone, fork creation, push to fork, PR creation.
@@ -82,7 +82,7 @@ python3 scripts/state.py init tmp/epic-codegen-${EPIC_ID}.json \
   version=0 \
   phase=init \
   status=running \
-  max_iterations=5
+  max_iterations=10
 ```
 
 Update epic-task status:
