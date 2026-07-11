@@ -208,13 +208,18 @@ Reviewers classify findings by severity; they do not set scores.
 
 ## Superpowers Integration
 
-Phase 2 uses the Superpowers plugin's `subagent-driven-development` (SDD)
-skill for implementation. SDD handles: per-task implementer dispatch,
-per-task review, fix loops, progress ledger, final code review.
+Phase 1 uses Superpowers `brainstorming` skill (via a design subagent) to
+generate the codegen spec. The subagent invokes brainstorming and acts as
+the human partner — answering brainstorming's questions from the epic body,
+strategy doc, and pattern discovery results. This produces a design spec
+with approach exploration and trade-off evaluation, not just a template fill.
 
-The orchestrator IS the human partner — epic ACs resolve all 12 SDD
-checkpoints autonomously (6 human-facing overrides + 6 controller
-clarifications). See SKILL.md **Autonomous Operation** for the full mapping.
+Phase 2 uses Superpowers `subagent-driven-development` (SDD) skill for
+implementation. SDD handles: per-task implementer dispatch, per-task review,
+fix loops, progress ledger, final code review.
+
+The orchestrator IS the human partner — epic ACs resolve all checkpoints
+autonomously. See SKILL.md **Autonomous Operation** for the full mapping.
 SDD artifacts land in `.target-repo/.superpowers/sdd/`.
 
 SDD scripts (permitted in settings.json):
@@ -230,9 +235,10 @@ Use `/epic-codegen EPIC_ID [--dry-run] [--max-iterations N] [--fork-owner USER]`
 Phase 1 — Spec & Plan:
   1. Read epic-task, validate dependencies
   2. Clone target repo, validate readiness (>=8/12)
-  3. Pattern discovery in target repo
-  4. Generate codegen-spec.md (AC-to-component mapping)
-  5. Generate codegen-plan.md (Superpowers plan format, TDD steps)
+  3. Pattern discovery in target repo (explicit refs, concept search, siblings, callers)
+  4. Invoke brainstorming (design subagent answers questions from gathered context)
+  5. Spec review gate (validate spec against actual repo patterns)
+  6. Generate codegen-plan.md (Superpowers plan format, TDD steps)
 
 Phase 2 — Subagent-Driven Development (Superpowers SDD):
   6. Record base SHA, init SDD workspace
