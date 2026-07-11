@@ -502,11 +502,14 @@ Agent:
 
     Work in: .target-repo/
 
-    Fix each item in the revision notes. For each fix:
+    Fix ALL items in the revision notes. For each fix:
     1. Read the current code at the cited file:line
     2. Apply the fix
-    3. Run covering tests
-    4. Commit
+
+    After ALL fixes are applied:
+    3. Run lint/typecheck once
+    4. Run tests once
+    5. Commit all changes in a single commit
 
     Write your report to: artifacts/codegen-runs/${EPIC_ID}/v${VERSION+1}/implementer-report.md
 
