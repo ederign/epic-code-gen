@@ -237,8 +237,9 @@ Phase 1 — Spec & Plan:
   2. Clone target repo, validate readiness (>=8/12)
   3. Pattern discovery in target repo (explicit refs, concept search, siblings, callers)
   4. Invoke brainstorming (design subagent answers questions from gathered context)
-  5. Spec review gate (validate spec against actual repo patterns)
-  6. Generate codegen-plan.md (Superpowers plan format, TDD steps)
+  5. Brainstorming → writing-plans (generates spec + plan with full detail)
+  6. Spec review gate (validate spec against actual repo patterns)
+  7. Validate plan output
 
 Phase 2 — Subagent-Driven Development (Superpowers SDD):
   6. Record base SHA, init SDD workspace
