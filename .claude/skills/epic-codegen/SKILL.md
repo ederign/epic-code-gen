@@ -236,8 +236,14 @@ truncate. If conventions are already documented in `CLAUDE.md` or
 
 ### Step 8: Generate Design Spec via Brainstorming
 
-Before writing the spec, prepare a context brief that summarizes everything
-gathered in Steps 5-7. Write it to
+**SEQUENCING: Steps 5-7 MUST complete before Step 8 begins.** The context
+brief below is built from pattern discovery results. If pattern discovery
+has not finished, STOP and wait for it. Do NOT dispatch the brainstorming
+subagent until the context brief is fully written with real data from
+Steps 5-7.
+
+Prepare a context brief that summarizes everything gathered in Steps 5-7.
+Write it to
 `artifacts/codegen-runs/${EPIC_ID}/context-brief.md`:
 
 ```markdown
