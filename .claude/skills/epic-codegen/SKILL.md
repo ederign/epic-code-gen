@@ -275,105 +275,20 @@ this epic needs — file:line, what it does, why it's relevant>
 <for each target file: who imports/uses it, how they consume it>
 ```
 
-Then dispatch a design subagent that invokes Superpowers brainstorming to
-generate the spec. The subagent acts as the human partner — answering
-brainstorming's questions from the context brief:
+Then dispatch the design spec generator:
 
 ```
 Agent:
   description: "Design spec ${EPIC_ID}"
+  agentType: "design-spec-generator"
   prompt: |
-    You are generating a design spec for epic ${EPIC_ID}.
+    Generate a design spec for ${EPIC_ID}.
 
-    ## Your Context
-
-    You have ALL the information needed to make design decisions:
-    - Context brief: artifacts/codegen-runs/${EPIC_ID}/context-brief.md
-    - Epic task: artifacts/epic-tasks/${EPIC_ID}.md
-    - Strategy: artifacts/strategies/${STRATEGY_KEY}.md
-    - Target repo: .target-repo/
-
-    Read the context brief first — it contains the epic requirements,
-    existing implementations, conventions, and callers.
-
-    ## Process
-
-    Invoke Skill("superpowers:brainstorming") to guide your design.
-
-    ## Autonomous Overrides
-
-    You ARE the human partner for brainstorming. You have all the
-    requirements and codebase knowledge. When brainstorming:
-
-    - **Asks clarifying questions**: answer from the context brief.
-      The epic-task body has the ACs and scope. The strategy doc has
-      the business need and technical approach. The existing
-      implementations show how the codebase solves similar problems.
-    - **Proposes approaches**: evaluate each approach against the
-      existing implementations in the context brief. Prefer approaches
-      that extend existing patterns over building new abstractions.
-    - **Presents design sections**: approve sections that align with
-      the epic ACs and existing codebase patterns. If a section
-      contradicts either, request revision with specific reasons.
-    - **Offers visual companion**: decline.
-    - **Asks for scope decomposition**: the epic is already scoped.
-      Proceed with the full epic as one design unit.
-
-    ## Conversation Log
-
-    As you work through brainstorming, record the full conversation in
-    artifacts/codegen-runs/${EPIC_ID}/brainstorming-log.md:
-
-    Start the log with a verification header:
-    ```
-    ## Skill Invocation
-    - Invoked Skill("superpowers:brainstorming"): yes/no
-    - Brainstorming's first question (verbatim): "<paste here>"
-    - Timestamp of invocation: <when you called the Skill tool>
-    ```
-
-    Then record each interaction clearly labeling who said what:
-    - **[BRAINSTORMING]**: paste the EXACT question or instruction text
-      from the brainstorming skill
-    - **[PIPELINE]**: your answer, citing the context source (which file,
-      which section of the context brief you used to answer)
-
-    Example:
-    ```
-    **[BRAINSTORMING]**: What is the primary goal of this feature?
-    **[PIPELINE]**: (from context-brief.md → Epic Requirements) Add an
-    "Existing secret" option to the workbench env vars form...
-    ```
-
-    Also record:
-    - Approach proposals (label [BRAINSTORMING] or [PIPELINE] for each)
-    - Design decisions and rationale
-
-    You MUST invoke Skill("superpowers:brainstorming"). Do not simulate
-    or approximate the brainstorming process — invoke the actual skill
-    and follow its instructions.
-
-    This log is the primary artifact for understanding WHY the spec
-    looks the way it does. Write it as you go, not after the fact.
-
-    ## Output Overrides
-
-    - Write the spec to: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-      (NOT docs/superpowers/specs/)
-    - Do NOT commit the spec — the pipeline manages commits
-    - Do NOT invoke writing-plans — return after the spec is written
-      and self-reviewed. The pipeline invokes writing-plans separately.
-
-    ## Spec Requirements
-
-    The spec MUST include (brainstorming covers most of these naturally):
-    - Every AC from the epic-task mapped to a design section
-    - File paths for every file to modify or create
-    - References to existing implementations that the design extends
-    - Out of scope section (from the epic's exclusions)
-
-    After writing: verify every AC has coverage in the spec. If any AC
-    is unmapped, add a section for it before finishing.
+    CONTEXT_BRIEF = artifacts/codegen-runs/${EPIC_ID}/context-brief.md
+    EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
+    STRATEGY_FILE = artifacts/strategies/${STRATEGY_KEY}.md
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    LOG_FILE = artifacts/codegen-runs/${EPIC_ID}/brainstorming-log.md
 ```
 
 Wait for the design subagent to complete. Read the generated spec at
@@ -403,78 +318,19 @@ If clean, proceed to Step 9.
 
 ### Step 9: Generate Implementation Plan via writing-plans
 
-Dispatch a plan subagent that invokes Superpowers writing-plans to
-generate the implementation plan from the validated spec:
+Dispatch the plan generator:
 
 ```
 Agent:
   description: "Write plan ${EPIC_ID}"
+  agentType: "plan-generator"
   prompt: |
-    You are generating an implementation plan for epic ${EPIC_ID}.
+    Generate an implementation plan for ${EPIC_ID}.
 
-    ## Your Context
-
-    - Spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    - Epic task: artifacts/epic-tasks/${EPIC_ID}.md
-    - Target repo: .target-repo/
-    - Target repo conventions: .target-repo/CLAUDE.md (or AGENTS.md)
-
-    Read the spec first — it is the input for the plan.
-
-    ## Process
-
-    Invoke Skill("superpowers:writing-plans") to generate the plan.
-
-    ## Conversation Log
-
-    Write a log to artifacts/codegen-runs/${EPIC_ID}/writing-plans-log.md
-
-    Start with a verification header:
-    ```
-    ## Skill Invocation
-    - Invoked Skill("superpowers:writing-plans"): yes/no
-    - Timestamp of invocation: <when you called the Skill tool>
-    ```
-
-    Then record every interaction:
-    - **[WRITING-PLANS]**: instructions, questions, or scope checks
-      from the skill (paste exact text)
-    - **[PIPELINE]**: your responses, decisions, and rationale (cite
-      which spec section informed the decision)
-
-    Record the self-review results: what was checked, what was fixed.
-
-    You MUST invoke Skill("superpowers:writing-plans"). Do not simulate
-    or approximate the process — invoke the actual skill.
-
-    ## Autonomous Overrides
-
-    You ARE the human partner for writing-plans. When writing-plans:
-
-    - **Asks about scope decomposition**: the spec is already scoped.
-      Proceed with a single plan.
-    - **Presents the completed plan for review**: approve if every
-      spec section has at least one Task and every Task has a test step.
-    - **Offers execution handoff (SDD vs Inline)**: do NOT choose
-      either. Do NOT invoke SDD or executing-plans. Return after the
-      plan is saved.
-
-    ## Output Overrides
-
-    - Write the plan to: artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
-      (NOT docs/superpowers/plans/)
-    - Do NOT commit the plan — the pipeline manages commits
-    - Add this section after "## Global Constraints" in the plan:
-
-      ## Model Override
-
-      All implementer and reviewer subagents MUST use the session's
-      inherited model (do not specify a model override). The SDD Model
-      Selection section does not apply to this plan — the calling skill
-      requires all agents to run at the session's model tier.
-
-    - Do NOT invoke any execution skill — return after the plan is
-      written and self-reviewed
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
+    PLAN_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
+    LOG_FILE = artifacts/codegen-runs/${EPIC_ID}/writing-plans-log.md
 ```
 
 Wait for the plan subagent to complete. Validate the output at
