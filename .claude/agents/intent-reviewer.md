@@ -57,6 +57,17 @@ missed or altered an AC, that is a Critical finding.
 7. **Behavioral completeness:** does the diff handle both the happy path AND
    the stated error/nil behavior for each AC?
 
+## Spec Design Decisions
+
+When the spec's Design Decisions section explicitly justifies a deviation
+from AC wording (e.g., AC says "error message" but spec chose
+`variant="warning"` to match existing codebase pattern), the
+implementation following the spec is **not an intent mismatch**. The spec
+was validated by the spec review gate before implementation began.
+
+Check the spec's Design Decisions before flagging deviations. Only flag
+if the implementation contradicts BOTH the AC AND the spec.
+
 ## Calibration
 
 | Severity | Examples |
@@ -64,6 +75,7 @@ missed or altered an AC, that is a Critical finding.
 | Critical | AC completely missing from diff; spec pass criterion fails (code doesn't match what criterion asserts); design decision contradicts epic Scope item; wrong field populated; behavior inverted |
 | Important | AC partially implemented (happy path only, error case missing); pass criterion ambiguous and code takes loosest interpretation; scope creep (feature not in spec added) |
 | Minor | Naming differs from spec suggestion (but behavior correct); extra logging |
+| NOT a finding | Implementation follows spec's design decision that deviates from AC wording; spec was validated before implementation |
 
 ## Rules
 

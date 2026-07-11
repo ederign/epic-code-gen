@@ -613,6 +613,13 @@ Mark oscillating findings as **skip — oscillating** in the revision notes.
 The fix subagent must not touch these areas — fixing them will recreate the
 opposite finding. Focus remaining fix effort on non-oscillating findings.
 
+**Cross-dimension deduplication:** Compare findings across all 4 scored
+dimensions. If the same finding appears in 2+ dimensions (e.g., "no test
+for error rendering" in both tests and intent), keep it in the most
+relevant dimension and mark duplicates as **skip — duplicate of
+{dimension} #{N}** in the revision notes. The fix subagent addresses each
+finding once; duplicates should not inflate the fix list or the score.
+
 Triage non-oscillating findings for the fix subagent. The script's scores
 and verdict are final — you cannot override them. Your job is to prioritize
 which findings the fix subagent should address:

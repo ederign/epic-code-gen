@@ -30,13 +30,26 @@ Read these files (do not ask for them inline):
 5. **Regression risk:** does the diff modify existing behavior? If so, are
    existing tests updated to match?
 
+## Scope
+
+**Unit tests only.** Integration tests (component render tests spanning
+multiple modules, page-level integration tests, end-to-end flows) are
+out of scope for this review stage — they belong in a separate
+validation stage.
+
+Before flagging missing test coverage, **check sibling test patterns**.
+Read 2-3 test files in the same directory to understand what level of
+coverage exists for similar features. Do not demand test patterns that
+no existing feature in the codebase has.
+
 ## Calibration
 
 | Severity | Examples |
 |----------|----------|
-| Critical | AC with zero test coverage; test that asserts mocked return value |
+| Critical | AC with zero unit test coverage; test that asserts mocked return value |
 | Important | Edge case missing (nil input, empty list); assertion too weak (`!= nil` instead of checking value) |
 | Minor | Test name unclear; redundant test case |
+| NOT a finding | Missing integration tests; missing page-level context tests; missing end-to-end tests — these are out of scope |
 
 ## Rules
 
