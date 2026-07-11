@@ -413,7 +413,15 @@ Agent:
     - **Testing**: the spec proposes test patterns that don't match how
       tests in the same directory are structured
 
-    Return a structured list:
+    Write your review log to:
+    artifacts/codegen-runs/${EPIC_ID}/spec-review-log.md
+
+    For each file you read, record:
+    - **[SPEC]**: what the spec proposes (cite section)
+    - **[CODEBASE]**: what the actual code does (cite file:line)
+    - **[VERDICT]**: match / mismatch (with category and recommended fix)
+
+    At the end, return a structured summary:
     - Section/component name
     - Mismatch category
     - What the spec proposes vs what existing code does
@@ -451,6 +459,28 @@ Agent:
     ## Process
 
     Invoke Skill("superpowers:writing-plans") to generate the plan.
+
+    ## Conversation Log
+
+    Write a log to artifacts/codegen-runs/${EPIC_ID}/writing-plans-log.md
+
+    Start with a verification header:
+    ```
+    ## Skill Invocation
+    - Invoked Skill("superpowers:writing-plans"): yes/no
+    - Timestamp of invocation: <when you called the Skill tool>
+    ```
+
+    Then record every interaction:
+    - **[WRITING-PLANS]**: instructions, questions, or scope checks
+      from the skill (paste exact text)
+    - **[PIPELINE]**: your responses, decisions, and rationale (cite
+      which spec section informed the decision)
+
+    Record the self-review results: what was checked, what was fixed.
+
+    You MUST invoke Skill("superpowers:writing-plans"). Do not simulate
+    or approximate the process — invoke the actual skill.
 
     ## Autonomous Overrides
 
@@ -905,7 +935,9 @@ Artifacts are files. They never enter your context as inline text.
 | strategy doc | fetch_epic.py (from Jira) | Orchestrator (context brief) |
 | context-brief.md | Orchestrator (Steps 5-7 summary) | Brainstorming design subagent |
 | brainstorming-log.md | Brainstorming design subagent | Post-run analysis (not consumed by pipeline) |
+| spec-review-log.md | Spec review gate agent | Post-run analysis (not consumed by pipeline) |
 | codegen-spec.md | Brainstorming design subagent (validated by spec review gate) | SDD implementers, all reviewer agents |
+| writing-plans-log.md | writing-plans subagent | Post-run analysis (not consumed by pipeline) |
 | codegen-plan.md | writing-plans subagent (Step 9) | SDD (reads plan, dispatches tasks) |
 | task-N-brief.md | SDD task-brief script | SDD implementer |
 | task-N-report.md | SDD implementer | SDD task reviewer |
