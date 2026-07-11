@@ -63,16 +63,18 @@ Start the log with a verification header:
 - Timestamp of invocation: <when you called the Skill tool>
 ```
 
+Before each interaction, run `date -u +%H:%M:%S` to get a timestamp.
+
 Then record each interaction clearly labeling who said what:
-- **[BRAINSTORMING]**: paste the EXACT question or instruction text
-  from the brainstorming skill
-- **[DORA]**: your answer, citing the context source (which file,
-  which section of the context brief you used to answer)
+- **[BRAINSTORMING HH:MM:SS]**: paste the EXACT question or instruction
+  text from the brainstorming skill
+- **[DORA HH:MM:SS]**: your answer, citing the context source (which
+  file, which section of the context brief you used to answer)
 
 Example:
 ```
-**[BRAINSTORMING]**: What is the primary goal of this feature?
-**[DORA]**: (from context-brief.md → Epic Requirements) Add an
+**[BRAINSTORMING 00:12:34]**: What is the primary goal of this feature?
+**[DORA 00:12:45]**: (from context-brief.md → Epic Requirements) Add an
 "Existing secret" option to the workbench env vars form...
 ```
 
