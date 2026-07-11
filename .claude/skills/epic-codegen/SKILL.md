@@ -153,9 +153,15 @@ epic. Read the reference files.
 file that will be modified or created. For each existing target file:
 - Read it fully — understand its internal structure, not just the symbol
   you're looking for
-- Find 2-3 sibling files (same directory, same extension) and read them.
+- Find 5-10 sibling files (same directory, same extension) and read them.
   Siblings reveal local conventions: naming, error handling, data flow,
-  test structure, ID generation patterns
+  test structure, ID generation patterns. More samples = more reliable
+  pattern detection.
+- Check sibling directories (directories at the same level as the target
+  file's parent). These often contain analogous modules that solve similar
+  problems — look for how they handle the same concerns (state, validation,
+  error handling, testing) that the epic's changes will need to address.
+  Read 2-3 representative files from each relevant sibling directory.
 - Grep for imports/usages of the target file's exports to find callers.
   Read the key callers to understand how the code being modified is consumed
   (e.g., is it instantiated once or many times? is it called in a loop?
