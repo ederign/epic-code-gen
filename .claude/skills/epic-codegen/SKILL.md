@@ -418,9 +418,15 @@ cd .target-repo && git diff ${BASE_SHA}..HEAD > ../artifacts/codegen-runs/${EPIC
 python3 scripts/validate_target.py .target-repo/ --json > artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
 ```
 
+Copy SDD workspace into artifacts for analysis:
+```bash
+cp -r .target-repo/.superpowers/sdd/ artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/sdd-workspace/
+```
+
 Save to `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/`:
 - `diff.patch` — the code changes (FILE — reviewers Read it, never inline)
 - `validation.json` — validate_target.py output
+- `sdd-workspace/` — SDD artifacts (task briefs, reports, progress ledger)
 
 Update state:
 ```bash
