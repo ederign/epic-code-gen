@@ -149,7 +149,22 @@ Read from `.target-repo/`:
 in the epic body: function names, type names, file paths mentioned in the
 epic. Read the reference files.
 
-**7b — Target file analysis:** From the epic body + strategy, identify every
+**7b — Concept search:** Extract the key concepts the epic needs to implement
+(e.g., "conflict detection", "lazy loading", "middleware filter", "form
+validation", "caching layer", "webhook handler"). For each concept, search
+the entire codebase for existing implementations:
+- Grep for related terms, function names, module names
+- When you find an existing implementation of the same concept, read it
+  thoroughly — it shows exactly how THIS codebase solves that problem
+- Record each existing implementation as a reference pattern with file:line
+
+This is the highest-value step. Most code is built on top of existing code.
+The implementer should extend or follow existing patterns, not invent new
+ones. If the codebase already has conflict detection, the epic's conflict
+detection should use the same approach. If the codebase already has a
+middleware chain, the new middleware should follow the same structure.
+
+**7c — Target file analysis:** From the epic body + strategy, identify every
 file that will be modified or created. For each existing target file:
 - Read it fully — understand its internal structure, not just the symbol
   you're looking for
@@ -167,7 +182,7 @@ file that will be modified or created. For each existing target file:
   (e.g., is it instantiated once or many times? is it called in a loop?
   does the caller pass data via arguments or shared state?)
 
-**7c — Document conventions:** From 7a and 7b, write a conventions summary
+**7d — Document conventions:** From 7a-7c, write a conventions summary
 to include in the codegen spec. Capture only what is relevant for THIS
 epic's changes:
 - Naming patterns (files, functions, variables, identifiers)
@@ -193,8 +208,13 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 
+## Existing Implementations
+<from Step 7b — existing code in the repo that solves the same concepts this
+epic needs. Implementers MUST extend or follow these, not build parallel
+systems. List each with file:line and a one-line summary of what it does.>
+
 ## Conventions
-<from Step 7c — naming, data flow, error handling, testing patterns observed
+<from Step 7d — naming, data flow, error handling, testing patterns observed
 in target files and their siblings. Implementers MUST follow these.>
 
 ## Components
