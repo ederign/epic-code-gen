@@ -364,7 +364,7 @@ Save as `BASE_SHA` — used for diff generation later.
 Run the SDD workspace setup in the target repo:
 
 ```bash
-cd .target-repo && bash ../superpowers/scripts/sdd-workspace
+cd .target-repo && bash ../../superpowers/skills/subagent-driven-development/scripts/sdd-workspace
 ```
 
 This creates `.superpowers/sdd/` with the progress ledger.
