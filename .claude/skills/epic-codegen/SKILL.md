@@ -323,10 +323,35 @@ Agent:
 
     As you work through brainstorming, record the full conversation in
     artifacts/codegen-runs/${EPIC_ID}/brainstorming-log.md:
-    - Every question brainstorming asks (or would ask)
-    - Your answer and the context you used to answer it
-    - Approach proposals and your evaluation of each
+
+    Start the log with a verification header:
+    ```
+    ## Skill Invocation
+    - Invoked Skill("superpowers:brainstorming"): yes/no
+    - Brainstorming's first question (verbatim): "<paste here>"
+    - Timestamp of invocation: <when you called the Skill tool>
+    ```
+
+    Then record each interaction clearly labeling who said what:
+    - **[BRAINSTORMING]**: paste the EXACT question or instruction text
+      from the brainstorming skill
+    - **[PIPELINE]**: your answer, citing the context source (which file,
+      which section of the context brief you used to answer)
+
+    Example:
+    ```
+    **[BRAINSTORMING]**: What is the primary goal of this feature?
+    **[PIPELINE]**: (from context-brief.md → Epic Requirements) Add an
+    "Existing secret" option to the workbench env vars form...
+    ```
+
+    Also record:
+    - Approach proposals (label [BRAINSTORMING] or [PIPELINE] for each)
     - Design decisions and rationale
+
+    You MUST invoke Skill("superpowers:brainstorming"). Do not simulate
+    or approximate the brainstorming process — invoke the actual skill
+    and follow its instructions.
 
     This log is the primary artifact for understanding WHY the spec
     looks the way it does. Write it as you go, not after the fact.
