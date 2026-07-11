@@ -35,13 +35,18 @@ You ARE the human partner. The epic-task ACs are your requirements.
 The strategy document and epic body are your domain knowledge.
 Never stop for user input — resolve every checkpoint yourself.
 
-### Overrides — Brainstorming (Step 8)
+### Overrides — Brainstorming (Step 8) and writing-plans (Step 9)
 
-The design subagent invokes brainstorming and acts as the human partner.
-It answers all brainstorming questions from the context brief (which
-contains the epic body, strategy, existing implementations, conventions,
-and callers gathered in Steps 5-7). See Step 8 for the full subagent
-prompt and overrides.
+Each Superpowers skill runs in its own subagent for reliable isolation:
+
+- **Brainstorming subagent** (Step 8): invokes brainstorming, acts as
+  the human partner answering questions from the context brief. Does NOT
+  invoke writing-plans — returns after the spec is written.
+- **writing-plans subagent** (Step 9): invokes writing-plans, acts as
+  the human partner. Does NOT invoke SDD or executing-plans — returns
+  after the plan is written.
+
+See Steps 8 and 9 for the full subagent prompts and overrides.
 
 ### Overrides — SDD would normally stop for human input
 
@@ -302,23 +307,9 @@ Agent:
 
     - Write the spec to: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
       (NOT docs/superpowers/specs/)
-    - Do NOT commit the spec or plan — the pipeline manages commits
-    - When brainstorming invokes writing-plans, LET IT RUN — but with
-      these plan overrides:
-      - Write the plan to: artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
-        (NOT docs/superpowers/plans/)
-      - Add this section after "## Global Constraints" in the plan:
-
-        ## Model Override
-
-        All implementer and reviewer subagents MUST use the session's
-        inherited model (do not specify a model override). The SDD Model
-        Selection section does not apply to this plan — the calling skill
-        requires all agents to run at the session's model tier.
-
-      - At the execution handoff, choose "Subagent-Driven" (SDD) — do
-        NOT actually start execution. Return after the plan is written.
-    - Do NOT start implementation — return after spec + plan are written
+    - Do NOT commit the spec — the pipeline manages commits
+    - Do NOT invoke writing-plans — return after the spec is written
+      and self-reviewed. The pipeline invokes writing-plans separately.
 
     ## Spec Requirements
 
@@ -333,8 +324,7 @@ Agent:
 ```
 
 Wait for the design subagent to complete. Read the generated spec at
-`artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md` and the plan at
-`artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`.
+`artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`.
 
 ### Step 8.5: Spec Review Gate
 
@@ -385,20 +375,70 @@ If the agent returns mismatches:
 
 If clean, proceed to Step 9.
 
-### Step 9: Validate Plan
+### Step 9: Generate Implementation Plan via writing-plans
 
-The brainstorming subagent (Step 8) invoked writing-plans, which wrote
-`artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`. Validate the output:
+Dispatch a plan subagent that invokes Superpowers writing-plans to
+generate the implementation plan from the validated spec:
+
+```
+Agent:
+  description: "Write plan ${EPIC_ID}"
+  prompt: |
+    You are generating an implementation plan for epic ${EPIC_ID}.
+
+    ## Your Context
+
+    - Spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    - Epic task: artifacts/epic-tasks/${EPIC_ID}.md
+    - Target repo: .target-repo/
+    - Target repo conventions: .target-repo/CLAUDE.md (or AGENTS.md)
+
+    Read the spec first — it is the input for the plan.
+
+    ## Process
+
+    Invoke Skill("superpowers:writing-plans") to generate the plan.
+
+    ## Autonomous Overrides
+
+    You ARE the human partner for writing-plans. When writing-plans:
+
+    - **Asks about scope decomposition**: the spec is already scoped.
+      Proceed with a single plan.
+    - **Presents the completed plan for review**: approve if every
+      spec section has at least one Task and every Task has a test step.
+    - **Offers execution handoff (SDD vs Inline)**: do NOT choose
+      either. Do NOT invoke SDD or executing-plans. Return after the
+      plan is saved.
+
+    ## Output Overrides
+
+    - Write the plan to: artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
+      (NOT docs/superpowers/plans/)
+    - Do NOT commit the plan — the pipeline manages commits
+    - Add this section after "## Global Constraints" in the plan:
+
+      ## Model Override
+
+      All implementer and reviewer subagents MUST use the session's
+      inherited model (do not specify a model override). The SDD Model
+      Selection section does not apply to this plan — the calling skill
+      requires all agents to run at the session's model tier.
+
+    - Do NOT invoke any execution skill — return after the plan is
+      written and self-reviewed
+```
+
+Wait for the plan subagent to complete. Validate the output at
+`artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md`:
 
 1. File exists and has the writing-plans header (Goal, Architecture,
    Tech Stack, Global Constraints)
-2. The `## Model Override` section is present (the subagent was
-   instructed to add it)
+2. The `## Model Override` section is present
 3. Every design section in the spec has at least one plan Task
 4. Every Task has a test step
 
-If validation fails, read the brainstorming-log.md to understand what
-happened and re-dispatch the design subagent.
+If validation fails, re-dispatch the plan subagent.
 
 Update state:
 ```bash
@@ -803,7 +843,7 @@ Artifacts are files. They never enter your context as inline text.
 | context-brief.md | Orchestrator (Steps 5-7 summary) | Brainstorming design subagent |
 | brainstorming-log.md | Brainstorming design subagent | Post-run analysis (not consumed by pipeline) |
 | codegen-spec.md | Brainstorming design subagent (validated by spec review gate) | SDD implementers, all reviewer agents |
-| codegen-plan.md | writing-plans (via brainstorming subagent) | SDD (reads plan, dispatches tasks) |
+| codegen-plan.md | writing-plans subagent (Step 9) | SDD (reads plan, dispatches tasks) |
 | task-N-brief.md | SDD task-brief script | SDD implementer |
 | task-N-report.md | SDD implementer | SDD task reviewer |
 | review-package diff | SDD review-package script | SDD task reviewer, final reviewer |
