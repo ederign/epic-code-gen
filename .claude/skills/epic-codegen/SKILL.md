@@ -169,7 +169,8 @@ find .target-repo/ -name "CLAUDE.md" -o -name "AGENTS.md" \
   -o -name ".cursorrules" -o -name ".cursor/rules" \
   -o -name "GEMINI.md" -o -name "COPILOT.md" \
   -o -name ".github/copilot-instructions.md" \
-  -o -name "CONVENTIONS.md" \
+  -o -name "CONVENTIONS.md" -o -name "CONSTITUTION.md" \
+  -o -name "constitution.md" -o -name ".constitution" \
   2>/dev/null
 ```
 
