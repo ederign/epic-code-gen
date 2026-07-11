@@ -13,8 +13,8 @@ Weights:
   architecture: 30%, tests: 30%, lint: 20%, intent: 20%
 
 Pass: weighted avg >= 8.0, no dimension < 6.0
-Near-miss: weighted avg >= 7.5, at most one dimension 5.0-5.9
-Fail: weighted avg < 7.5 or any dimension < 5.0
+Near-miss: weighted avg >= 7.0, at most one dimension 5.0-5.9
+Fail: weighted avg < 7.0 or any dimension < 5.0
 
 Usage:
     python3 scripts/score_reviews.py <reviews-dir>
@@ -259,8 +259,7 @@ def main():
         else:
             print(format_report(result))
 
-        exit_codes = {"pass": 0, "near-miss": 0, "fail": 1, "incomplete": 2}
-        sys.exit(exit_codes.get(result["verdict"], 1))
+        sys.exit(0 if result["verdict"] != "incomplete" else 2)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)

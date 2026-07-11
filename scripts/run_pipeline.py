@@ -24,12 +24,15 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+
+log = logging.getLogger("pipeline")
 
 sys.path.insert(0, os.path.dirname(__file__))
 from artifact_utils import find_epic_task, read_frontmatter_validated
@@ -1082,6 +1085,7 @@ def _ci_handle_ready(epic, state, args, server, user, token):
         datetime.now(timezone.utc).isoformat()
     save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
+    log.info("%s: invoking codegen v%d", epic_id, state["current_version"])
     success = invoke_codegen(epic_id, args)
 
     # The codegen skill may iterate internally (v1→v2→...); sync version
@@ -1089,6 +1093,8 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     if actual_version > state["current_version"]:
         print(f"  Version sync: skill iterated to v{actual_version} "
               f"(state had v{state['current_version']})")
+        log.info("%s: version sync %d → %d",
+                 epic_id, state["current_version"], actual_version)
         state["current_version"] = actual_version
 
     _copy_codegen_artifacts_to_data_repo(
@@ -1135,9 +1141,16 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
 
     state["scores"] = scores
     avg = scores.get("weighted_average", 0)
+    verdict = scores.get("verdict", "unknown")
     dims = scores.get("dimensions", {})
     dims_ok = all(dims.get(d, {}).get("score", 0) >= 6.0
                   for d in ("architecture", "tests", "lint", "intent"))
+
+    dim_detail = ", ".join(
+        f"{d}={dims.get(d, {}).get('score', '?')}"
+        for d in ("architecture", "tests", "lint", "intent"))
+    log.info("%s v%d scores: avg=%.1f verdict=%s (%s)",
+             epic_id, version, avg, verdict, dim_detail)
 
     if avg >= 8.0 and dims_ok:
         pr_url = _create_pr_for_epic(epic, state, args)
@@ -1521,6 +1534,8 @@ def process_strategy_ci(strategy_key, server, user, token, args):
 
         results[action].append((epic_id, detail))
         print(f"  {epic_id}: {from_state} → {to_state} ({detail})")
+        log.info("%s: %s → %s [%s] %s", epic_id, from_state, to_state,
+                 action, detail)
 
         if from_state != to_state:
             actions_log.append({
@@ -1571,8 +1586,25 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def _setup_logging(log_dir):
+    """Configure pipeline logger with console + file handlers."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    os.makedirs(log_dir, exist_ok=True)
+    fh = logging.FileHandler(
+        os.path.join(log_dir, "pipeline.log"), encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S"))
+    log.addHandler(fh)
+
+
 def main(argv=None):
     args = parse_args(argv)
+    _setup_logging(args.log_dir)
     start_time = datetime.now(timezone.utc)
 
     for key in args.keys:

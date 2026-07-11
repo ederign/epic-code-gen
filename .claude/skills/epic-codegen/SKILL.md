@@ -145,13 +145,33 @@ Read from `.target-repo/`:
 
 ### Step 7: Pattern Discovery
 
-Search the target repo for patterns referenced in the epic body:
-- Function names, type names, file paths mentioned in the epic
-- Existing implementations to use as reference
-- Test patterns to replicate
+**7a — Explicit references:** Search the target repo for patterns referenced
+in the epic body: function names, type names, file paths mentioned in the
+epic. Read the reference files.
 
-Read the reference files. These become the "reference pattern" sections in
-the codegen spec.
+**7b — Target file analysis:** From the epic body + strategy, identify every
+file that will be modified or created. For each existing target file:
+- Read it fully — understand its internal structure, not just the symbol
+  you're looking for
+- Find 2-3 sibling files (same directory, same extension) and read them.
+  Siblings reveal local conventions: naming, error handling, data flow,
+  test structure, ID generation patterns
+- Grep for imports/usages of the target file's exports to find callers.
+  Read the key callers to understand how the code being modified is consumed
+  (e.g., is it instantiated once or many times? is it called in a loop?
+  does the caller pass data via arguments or shared state?)
+
+**7c — Document conventions:** From 7a and 7b, write a conventions summary
+to include in the codegen spec. Capture only what is relevant for THIS
+epic's changes:
+- Naming patterns (files, functions, variables, identifiers)
+- Data flow patterns (how data/state passes between modules)
+- Error handling patterns
+- Testing conventions (setup, assertions, fixtures)
+- Any pattern the existing sibling files follow consistently
+
+Keep the summary under 30 lines. If conventions are already documented in
+`CLAUDE.md` or `CONTRIBUTING.md`, reference those instead of repeating them.
 
 ### Step 8: Write Codegen Spec
 
@@ -167,10 +187,15 @@ Create `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 
+## Conventions
+<from Step 7c — naming, data flow, error handling, testing patterns observed
+in target files and their siblings. Implementers MUST follow these.>
+
 ## Components
 ### Component 1: <what to change>
 - File: <path in target repo>
 - Reference pattern: <existing code to adapt from, with file:line>
+- Callers: <key files that import/use this module, from Step 7b>
 - Acceptance criteria: <AC from epic>
 - Pass criteria: <what "done" looks like — specific assertions>
 
@@ -188,6 +213,55 @@ Auto-validate:
    contradiction. The Scope section contains specific implementation
    requirements (e.g., "radio button," "typeahead dropdown") that may be
    more precise than the numbered ACs.
+
+### Step 8.5: Spec Review Gate
+
+Dispatch a review agent to validate the spec against the target repo's
+actual patterns before proceeding to plan generation:
+
+```
+Agent:
+  description: "Spec review ${EPIC_ID}"
+  prompt: |
+    You are reviewing a codegen spec for pattern mismatches against the
+    target repo's existing code.
+
+    Read the spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+
+    For each Component in the spec:
+    1. Read the target file listed in the Component
+    2. Read 1-2 sibling files (same directory, same extension)
+    3. If the Component lists Callers, read those caller files
+
+    Check for these mismatches (language-agnostic):
+
+    - **Data flow**: the spec proposes passing data between modules in a
+      way that differs from how existing code in the same area does it
+    - **Naming**: proposed names don't match the naming conventions in
+      sibling files
+    - **Reuse**: the spec proposes building something new when an existing
+      utility or module in the repo already does the same thing
+    - **Integration**: the spec modifies a module without accounting for
+      how its callers use it (e.g., callers instantiate it multiple times,
+      callers depend on a specific interface, callers pass unique
+      identifiers)
+    - **Testing**: the spec proposes test patterns that don't match how
+      tests in the same directory are structured
+
+    Return a structured list:
+    - Component name
+    - Mismatch category
+    - What the spec proposes vs what existing code does
+    - Recommended fix
+
+    If no mismatches found, return "CLEAN".
+```
+
+If the agent returns mismatches:
+- Update the spec's Components and Design Decisions to fix them
+- Re-run the auto-validate checks from Step 8
+
+If clean, proceed to Step 9.
 
 ### Step 9: Write Codegen Plan
 
@@ -380,6 +454,37 @@ Update state:
 python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=evaluate
 ```
 
+### Step 15.5: Write Decision Log
+
+Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/decision-log.md` with the
+scoring results and the verdict path about to be taken. This log is the primary
+artifact for post-run analysis.
+
+```markdown
+# Decision Log — ${EPIC_ID} v${VERSION}
+
+## Timestamp
+<output of: python3 scripts/state.py timestamp>
+
+## Scores
+| Dimension | Score | Findings (C/I/M) | Weight | Weighted |
+|-----------|-------|-------------------|--------|----------|
+| architecture | X.X | C/I/M | 30% | X.XX |
+| tests | X.X | C/I/M | 30% | X.XX |
+| lint | X.X | C/I/M | 20% | X.XX |
+| intent | X.X | C/I/M | 20% | X.XX |
+
+**Weighted Average:** X.X/10
+**Verdict:** pass | near-miss | fail | incomplete
+
+## Decision Path
+<which Step 16 branch will be taken>
+- Version: N of max_iterations
+- Path: pass → PR | near-miss → iterate | fail → iterate | near-miss+exhausted → PR | fail+exhausted → report | incomplete → re-dispatch
+```
+
+Append to this log in subsequent steps (Step 17 triage, Step 18 fix result).
+
 ## Phase 4: Iterate or Complete
 
 ### Step 16: Evaluate Verdict
@@ -480,6 +585,25 @@ Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
 - For each: what to fix, why, which reviewer flagged it, file:line
 - Pre-existing issues noted separately (not fixable by this pipeline)
 
+Append triage decisions to the decision log
+(`artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/decision-log.md`):
+
+```markdown
+## Triage Decisions
+
+| # | Finding | Dimension | Severity | Disposition | Reason |
+|---|---------|-----------|----------|-------------|--------|
+| 1 | <finding summary> | architecture | Critical | fix | <why> |
+| 2 | <finding summary> | lint | Important | skip — oscillating | <which versions> |
+| 3 | <finding summary> | tests | Minor | skip — pre-existing | outside diff |
+
+## Triage Summary
+- Findings to fix: N (Criticals: N, Importants: N, Minors: N)
+- Oscillating (skip): N
+- Pre-existing (skip): N
+- Total findings across all reviewers: N
+```
+
 Increment version:
 ```bash
 python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json version=$((VERSION+1)) phase=implementing
@@ -519,8 +643,20 @@ Agent:
     - Test summary
 ```
 
-After fix subagent completes, go to Step 13 (save artifacts → review →
-evaluate). Do NOT re-enter SDD for targeted fixes.
+After fix subagent completes, append the result to the decision log
+(`artifacts/codegen-runs/${EPIC_ID}/v${PREV_VERSION}/decision-log.md`,
+where PREV_VERSION is the version whose triage triggered this fix):
+
+```markdown
+## Fix Agent Result
+- Status: <DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT>
+- Commits: <count>
+- Tests: <pass | fail — summary>
+- Findings addressed: <N of M from revision notes>
+```
+
+Then go to Step 13 (save artifacts → review → evaluate). Do NOT re-enter
+SDD for targeted fixes.
 
 ## Run Metadata
 
@@ -579,7 +715,7 @@ Artifacts are files. They never enter your context as inline text.
 | Artifact | Written by | Read by |
 |----------|-----------|---------|
 | strategy doc | fetch_epic.py (from Jira) | Orchestrator (spec generation) |
-| codegen-spec.md | Orchestrator | SDD implementers, all reviewer agents |
+| codegen-spec.md | Orchestrator (validated by spec review gate) | SDD implementers, all reviewer agents |
 | codegen-plan.md | Orchestrator | SDD (reads plan, dispatches tasks) |
 | task-N-brief.md | SDD task-brief script | SDD implementer |
 | task-N-report.md | SDD implementer | SDD task reviewer |
@@ -590,6 +726,7 @@ Artifacts are files. They never enter your context as inline text.
 | review-{arch,tests,lint,intent}.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
 | review-wiring.md | Wiring verifier | Orchestrator (triage only, not scored) |
 | revision-notes.md | Orchestrator | Fix subagent |
+| decision-log.md | Orchestrator | Post-run analysis (not consumed by pipeline) |
 
 ## State Recovery
 
