@@ -157,9 +157,29 @@ all the context a product owner would provide.
 ### Step 6: Read Repo Context
 
 Read from `.target-repo/`:
-- `CLAUDE.md` or `AGENTS.md` (target repo conventions)
-- `CONTRIBUTING.md` if present
 - Key files named in the epic body (reference implementations, target files)
+- `CONTRIBUTING.md` if present
+
+**Scan for agent-readiness files** across the entire repo. These are the
+highest-signal convention sources — they were written specifically to tell
+agents how the codebase works:
+
+```bash
+find .target-repo/ -name "CLAUDE.md" -o -name "AGENTS.md" \
+  -o -name ".cursorrules" -o -name ".cursor/rules" \
+  -o -name "GEMINI.md" -o -name "COPILOT.md" \
+  -o -name ".github/copilot-instructions.md" \
+  -o -name "CONVENTIONS.md" \
+  2>/dev/null
+```
+
+Read ALL found files. Pay special attention to:
+- **Root-level files** (`CLAUDE.md`, `AGENTS.md`): repo-wide conventions
+- **Nested files** (e.g., `frontend/CLAUDE.md`, `pkg/api/AGENTS.md`):
+  subsystem-specific conventions that apply to the target files for this
+  epic. These often contain the most relevant patterns.
+- **Cursor/Copilot rules**: often contain coding standards, naming
+  conventions, and architecture notes that apply to the whole repo
 
 ### Step 7: Pattern Discovery
 
@@ -209,8 +229,9 @@ epic's changes:
 - Testing conventions (setup, assertions, fixtures)
 - Any pattern the existing sibling files follow consistently
 
-Keep the summary under 30 lines. If conventions are already documented in
-`CLAUDE.md` or `CONTRIBUTING.md`, reference those instead of repeating them.
+Include every convention that is relevant to the epic's changes — do not
+truncate. If conventions are already documented in `CLAUDE.md` or
+`CONTRIBUTING.md`, reference those instead of repeating them.
 
 ### Step 8: Generate Design Spec via Brainstorming
 
