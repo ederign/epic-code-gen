@@ -202,7 +202,7 @@ Any Critical finding caps the dimension score at 5.
 Weights: architecture 30%, tests 30%, lint 20%, intent 20%.
 Verdict: pass (>=8.0, no dim <6.0), near-miss (>=7.0), fail, incomplete.
 
-Reviewer agents live in `agents/` — one per dimension. Each is a standalone
+Reviewer agents live in `.claude/agents/` — one per dimension. Each is a standalone
 agent definition with calibration tables and structured output format.
 Reviewers classify findings by severity; they do not set scores.
 

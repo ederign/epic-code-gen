@@ -456,7 +456,7 @@ If the wiring verifier reports Critical findings, proceed to Step 14 normally.
 
 Dispatch in parallel via 4 Agent tool calls.
 
-Each reviewer is a standalone agent definition in `agents/`. The orchestrator
+Each reviewer is a standalone agent definition in `.claude/agents/`. The orchestrator
 dispatches them — it does not construct reviewer prompts inline.
 
 For each dimension (architecture, tests, lint, intent):
@@ -735,14 +735,14 @@ skip its own model selection and inherit the session model for all subagents.
 
 ## Review Dimensions
 
-4 independent reviewer agents, each a standalone definition in `agents/`:
+4 independent reviewer agents, each a standalone definition in `.claude/agents/`:
 
 | Dimension | Agent | Weight | Focus |
 |-----------|-------|--------|-------|
-| architecture | `agents/architecture-reviewer.md` | 30% | Repo conventions, structural fit, integration quality |
-| tests | `agents/tests-reviewer.md` | 30% | AC coverage, TDD evidence, edge cases, assertion quality |
-| lint | `agents/lint-reviewer.md` | 20% | Lint/typecheck/build pass, code style, error handling |
-| intent | `agents/intent-reviewer.md` | 20% | AC alignment, scope check, semantic correctness |
+| architecture | `.claude/agents/architecture-reviewer.md` | 30% | Repo conventions, structural fit, integration quality |
+| tests | `.claude/agents/tests-reviewer.md` | 30% | AC coverage, TDD evidence, edge cases, assertion quality |
+| lint | `.claude/agents/lint-reviewer.md` | 20% | Lint/typecheck/build pass, code style, error handling |
+| intent | `.claude/agents/intent-reviewer.md` | 20% | AC alignment, scope check, semantic correctness |
 
 Pluggable: add/remove/replace a dimension = add/remove an agent file +
 update score_reviews.py weights.
