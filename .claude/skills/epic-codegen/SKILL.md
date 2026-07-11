@@ -460,14 +460,14 @@ If the wiring verifier reports Critical findings, proceed to Step 14 normally.
 
 ## Phase 3: Multi-Dimensional Review
 
-### Step 14: Dispatch 4 Reviewer Agents
+### Step 14: Dispatch Reviewer Agents
 
-Dispatch in parallel via 4 Agent tool calls.
+Dispatch all 5 agents in parallel (4 scored reviewers + interaction verifier).
 
-Each reviewer is a standalone agent definition in `.claude/agents/`. The orchestrator
+Each agent is a standalone definition in `.claude/agents/`. The orchestrator
 dispatches them — it does not construct reviewer prompts inline.
 
-For each dimension (architecture, tests, lint, intent):
+For each scored dimension (architecture, tests, lint, intent):
 
 ```
 Agent:
@@ -487,6 +487,23 @@ Where `${EXTRA_FILES}` is set per dimension:
 - **tests:** (none — reads spec ACs)
 - **lint:** `VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
 - **intent:** `EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md` (verifies against original ACs, not just the spec's interpretation)
+
+In parallel, dispatch the interaction verifier (not scored):
+
+```
+Agent:
+  description: "Verify interactions ${EPIC_ID} v${VERSION}"
+  agentType: "interaction-verifier"
+  prompt: |
+    Trace user interactions through the code for ${EPIC_ID} v${VERSION}.
+
+    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-interactions.md
+```
+
+The interaction review is NOT scored — findings go to Step 17 triage
+alongside wiring verifier findings.
 
 ### Step 15: Aggregate Scores
 
@@ -598,6 +615,7 @@ context — Read the files):
 - `v${VERSION}/review-lint.md`
 - `v${VERSION}/review-intent.md`
 - `v${VERSION}/review-wiring.md` (not scored, but findings go to fix subagent)
+- `v${VERSION}/review-interactions.md` (not scored, but findings go to fix subagent)
 
 **Oscillation detection:** If VERSION > 2, also read the revision-notes from
 prior versions (`v1/revision-notes.md` through `v${VERSION-1}/revision-notes.md`).
@@ -783,6 +801,7 @@ Artifacts are files. They never enter your context as inline text.
 | validation.json | validate_target.py | Lint reviewer agent |
 | review-{arch,tests,lint,intent}.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
 | review-wiring.md | Wiring verifier | Orchestrator (triage only, not scored) |
+| review-interactions.md | Interaction verifier | Orchestrator (triage only, not scored) |
 | revision-notes.md | Orchestrator | Fix subagent |
 | decision-log.md | Orchestrator | Post-run analysis (not consumed by pipeline) |
 
