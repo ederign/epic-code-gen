@@ -381,53 +381,18 @@ Wait for the design subagent to complete. Read the generated spec at
 
 ### Step 8.5: Spec Review Gate
 
-Dispatch a review agent to validate the spec against the target repo's
-actual patterns before proceeding to plan generation:
+Dispatch the spec reviewer agent to validate the spec against the target
+repo's actual patterns before proceeding to plan generation:
 
 ```
 Agent:
   description: "Spec review ${EPIC_ID}"
+  agentType: "spec-reviewer"
   prompt: |
-    You are reviewing a codegen spec for pattern mismatches against the
-    target repo's existing code.
+    Review the codegen spec for ${EPIC_ID}.
 
-    Read the spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-
-    For each design section that names target files:
-    1. Read the target file in .target-repo/
-    2. Read 1-2 sibling files (same directory, same extension)
-    3. If the spec names callers or consumers, read those files
-
-    Check for these mismatches (language-agnostic):
-
-    - **Data flow**: the spec proposes passing data between modules in a
-      way that differs from how existing code in the same area does it
-    - **Naming**: proposed names don't match the naming conventions in
-      sibling files
-    - **Reuse**: the spec proposes building something new when an existing
-      utility or module in the repo already does the same thing
-    - **Integration**: the spec modifies a module without accounting for
-      how its callers use it (e.g., callers instantiate it multiple times,
-      callers depend on a specific interface, callers pass unique
-      identifiers)
-    - **Testing**: the spec proposes test patterns that don't match how
-      tests in the same directory are structured
-
-    Write your review log to:
-    artifacts/codegen-runs/${EPIC_ID}/spec-review-log.md
-
-    For each file you read, record:
-    - **[SPEC]**: what the spec proposes (cite section)
-    - **[CODEBASE]**: what the actual code does (cite file:line)
-    - **[VERDICT]**: match / mismatch (with category and recommended fix)
-
-    At the end, return a structured summary:
-    - Section/component name
-    - Mismatch category
-    - What the spec proposes vs what existing code does
-    - Recommended fix
-
-    If no mismatches found, return "CLEAN".
+    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+    LOG_FILE = artifacts/codegen-runs/${EPIC_ID}/spec-review-log.md
 ```
 
 If the agent returns mismatches:
