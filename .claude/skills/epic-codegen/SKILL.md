@@ -361,13 +361,15 @@ Save as `BASE_SHA` — used for diff generation later.
 
 ### Step 11: Initialize SDD Workspace
 
-Run the SDD workspace setup in the target repo:
+Create the SDD workspace in the target repo:
 
 ```bash
-cd .target-repo && bash ../../superpowers/skills/subagent-driven-development/scripts/sdd-workspace
+mkdir -p .target-repo/.superpowers/sdd
+printf '*\n' > .target-repo/.superpowers/sdd/.gitignore
 ```
 
-This creates `.superpowers/sdd/` with the progress ledger.
+This creates `.superpowers/sdd/` (gitignored) for SDD artifacts: task
+briefs, implementer reports, review packages, and the progress ledger.
 
 ### Step 12: Invoke SDD
 
