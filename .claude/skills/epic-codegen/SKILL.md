@@ -467,13 +467,18 @@ This creates `.superpowers/sdd/` with the progress ledger.
 
 ### Step 12: Invoke SDD
 
-Invoke the Superpowers subagent-driven-development skill:
+Read the plan into context so SDD can find it:
+```
+Read artifacts/codegen-runs/${EPIC_ID}/codegen-plan.md
+```
+
+Then invoke the Superpowers subagent-driven-development skill:
 
 ```
 Skill("superpowers:subagent-driven-development")
 ```
 
-SDD reads the plan file (`codegen-plan.md`), recognizes the plan header, and
+SDD sees the plan in conversation context, recognizes the plan header, and
 runs its full pipeline:
 1. Creates todos from plan tasks
 2. Per task: dispatches implementer → task review → fix loops
@@ -487,8 +492,13 @@ the least powerful model") does not apply — this pipeline requires consistent
 model quality across all agents. The plan's `## Model Override` section
 reinforces this.
 
-**Override:** when SDD reaches `finishing-a-development-branch`, do NOT invoke
-that skill. Proceed directly to Step 13.
+**Override — skip SDD final review:** when SDD finishes all tasks and is about
+to dispatch the final whole-branch code review, SKIP it. The pipeline's Phase 3
+runs 4 specialized reviewers with deterministic scoring — SDD's general review
+is redundant. Proceed directly to Step 13.
+
+**Override — skip finishing:** do NOT invoke `finishing-a-development-branch`.
+Proceed directly to Step 13.
 
 ### Step 13: Save Version Artifacts
 
