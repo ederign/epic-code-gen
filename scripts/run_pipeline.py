@@ -961,22 +961,18 @@ def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
     if not os.path.isdir(src):
         return
 
-    for name in ("codegen-spec.md", "codegen-plan.md",
-                 "final-diff.patch", "best-diff.patch",
-                 "pr-replies.json"):
-        s = os.path.join(src, name)
-        if os.path.isfile(s):
-            shutil.copy2(s, os.path.join(dest, name))
-
+    # Copy everything from the codegen run directory
     for entry in sorted(os.listdir(src)):
-        v_src = os.path.join(src, entry)
-        if os.path.isdir(v_src) and entry.startswith("v"):
-            v_dest = os.path.join(dest, entry)
-            os.makedirs(v_dest, exist_ok=True)
-            for f in os.listdir(v_src):
-                sf = os.path.join(v_src, f)
-                if os.path.isfile(sf):
-                    shutil.copy2(sf, os.path.join(v_dest, f))
+        entry_src = os.path.join(src, entry)
+        entry_dest = os.path.join(dest, entry)
+        if entry.startswith("run-attempt"):
+            continue
+        if os.path.isfile(entry_src):
+            shutil.copy2(entry_src, entry_dest)
+        elif os.path.isdir(entry_src):
+            if os.path.isdir(entry_dest):
+                shutil.rmtree(entry_dest)
+            shutil.copytree(entry_src, entry_dest)
 
 
 def ci_process_epic(epic, state, args, server, user, token):
