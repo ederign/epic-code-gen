@@ -677,6 +677,26 @@ Mark oscillating findings as **skip — oscillating** in the revision notes.
 The fix subagent must not touch these areas — fixing them will recreate the
 opposite finding. Focus remaining fix effort on non-oscillating findings.
 
+**Accepted findings carry-forward:** When triage marks a finding as
+ACCEPT (e.g., a valid style choice, a wrapper test that's intentionally
+simple), record it in the revision notes under a dedicated section:
+
+```markdown
+## Accepted Findings (do not re-flag)
+| # | Finding | Dimension | Accepted in | Reason |
+|---|---------|-----------|-------------|--------|
+| 1 | useSecretsAccessReview tests verify only mocked values | tests | v1 | wrapper test is valid |
+```
+
+On subsequent iterations, compare each reviewer finding against the
+accepted list. If a finding matches an accepted entry (same file, same
+concern), mark it **skip — accepted in v{N}** in the revision notes.
+Do NOT fix it, do NOT count it toward the fix list. This prevents
+reviewers from repeatedly penalizing the same accepted decision.
+
+The accepted list accumulates across versions — once accepted, it stays
+accepted unless the triage explicitly revokes it.
+
 **Cross-dimension deduplication:** Compare findings across all 4 scored
 dimensions. If the same finding appears in 2+ dimensions (e.g., "no test
 for error rendering" in both tests and intent), keep it in the most
@@ -698,8 +718,9 @@ the fix agent doesn't waste time on them. These still count toward the
 score — the code must pass clean to score well.
 
 Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
+- Accepted findings (skip — accepted in prior triage, do not re-flag or fix)
 - Oscillating findings (skip — do not fix)
-- Prioritized list of non-oscillating findings to fix
+- Prioritized list of non-oscillating, non-accepted findings to fix
 - For each: what to fix, why, which reviewer flagged it, file:line
 - Pre-existing issues noted separately (not fixable by this pipeline)
 
