@@ -343,7 +343,9 @@ Agent:
     LOG_FILE = artifacts/codegen-runs/${EPIC_ID}/brainstorming-log.md
 ```
 
-Wait for the design subagent to complete. Read the generated spec at
+Wait for the design subagent completion notification. Do NOT poll the
+filesystem for the spec file — the Agent tool notifies you automatically
+when the subagent finishes. Read the generated spec at
 `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`.
 
 ### Step 8.5: Spec Review Gate
@@ -361,6 +363,9 @@ Agent:
     SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
     LOG_FILE = artifacts/codegen-runs/${EPIC_ID}/spec-review-log.md
 ```
+
+Wait for the spec reviewer completion notification. Do NOT poll the
+filesystem — the Agent tool notifies you when the subagent finishes.
 
 If the agent returns mismatches:
 - Update the spec to fix them
