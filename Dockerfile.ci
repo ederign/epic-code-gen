@@ -38,6 +38,10 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
 # Python packages needed by epic-code-gen
 RUN pip3 install --no-cache-dir pyyaml pytest
 
+# Playwright for UX prototype parsing (parse_prototype.js)
+RUN npm install -g playwright \
+    && npx playwright install --with-deps chromium
+
 # Non-root user (required by Claude Code)
 RUN useradd -m claude-ci \
     && mkdir -p /home/claude-ci/.local/bin \

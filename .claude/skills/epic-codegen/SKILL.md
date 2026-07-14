@@ -234,9 +234,34 @@ Include every convention that is relevant to the epic's changes — do not
 truncate. If conventions are already documented in `CLAUDE.md` or
 `CONTRIBUTING.md`, reference those instead of repeating them.
 
+### Step 7.5: Parse UX Prototype (if available)
+
+Check the strategy body (read in Step 5) for a UXD marker indicating
+UX prototype availability. Look for patterns like:
+- "UXD Support: Required" or "UXD Support Required"
+- A referenced HTML filename (e.g., "attached in Jira in the file: create-workbench-env-vars.html")
+
+If UXD marker is found:
+
+1. Check `artifacts/strategies/prototypes/${STRATEGY_KEY}/` for HTML files.
+   If none exist (manual placement or download failed), log a warning:
+   "UXD Support marked Required but no prototype HTML found" and continue.
+
+2. If HTML file found, run the prototype parser:
+   ```bash
+   node scripts/parse_prototype.js \
+     artifacts/strategies/prototypes/${STRATEGY_KEY}/<filename>.html \
+     artifacts/codegen-runs/${EPIC_ID}/prototype-analysis/
+   ```
+
+3. Read `artifacts/codegen-runs/${EPIC_ID}/prototype-analysis/prototype-summary.md`
+   for inclusion in the context brief.
+
+If no UXD marker in the strategy body, skip this step silently.
+
 ### Step 8: Generate Design Spec via Brainstorming
 
-**SEQUENCING: Steps 5-7 MUST complete before Step 8 begins.** The context
+**SEQUENCING: Steps 5-7.5 MUST complete before Step 8 begins.** The context
 brief below is built from pattern discovery results. If pattern discovery
 has not finished, STOP and wait for it. Do NOT dispatch the brainstorming
 subagent until the context brief is fully written with real data from
@@ -273,6 +298,27 @@ this epic needs — file:line, what it does, why it's relevant>
 
 ## Callers (from Step 7c)
 <for each target file: who imports/uses it, how they consume it>
+
+## Prototype Scenarios (from Step 7.5)
+<If a UX prototype was parsed, include the full prototype-summary.md content here.
+ This section provides:
+ - Component inventory (PatternFly components and variants UX selected)
+ - Per-scenario descriptions with alerts, states, disabled elements
+ - Screenshot file paths for visual reference
+
+ ### PatternFly Compliance Rule
+ When a UX prototype is provided, the implementation MUST use the same
+ PatternFly components identified in the Component Inventory above.
+ Do not substitute alternative components or custom implementations
+ for components that UX has explicitly specified in the prototype.
+ Follow PatternFly conventions for all component usage — variants,
+ props, accessibility attributes, and layout patterns.
+
+ ### Scenario Screenshots
+ <list screenshot file paths from prototype-analysis/ for brainstorming
+  to reference via the Read tool when visual detail is needed>
+
+ If no prototype was parsed, OMIT this entire section.>
 ```
 
 Then dispatch the design spec generator:
@@ -787,7 +833,8 @@ Artifacts are files. They never enter your context as inline text.
 | Artifact | Written by | Read by |
 |----------|-----------|---------|
 | strategy doc | fetch_epic.py (from Jira) | Orchestrator (context brief) |
-| context-brief.md | Orchestrator (Steps 5-7 summary) | Brainstorming design subagent |
+| prototype-analysis/ | parse_prototype.js (Step 7.5) | Orchestrator (context brief), brainstorming subagent (screenshots) |
+| context-brief.md | Orchestrator (Steps 5-7.5 summary) | Brainstorming design subagent |
 | brainstorming-log.md | Brainstorming design subagent | Post-run analysis (not consumed by pipeline) |
 | spec-review-log.md | Spec review gate agent | Post-run analysis (not consumed by pipeline) |
 | codegen-spec.md | Brainstorming design subagent (validated by spec review gate) | SDD implementers, all reviewer agents |

@@ -31,7 +31,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from artifact_utils import write_frontmatter
-from jira_utils import require_env, get_issue, adf_to_markdown
+from jira_utils import require_env, get_issue, download_attachment, adf_to_markdown
 
 
 def parse_report(html_content):
@@ -340,7 +340,7 @@ def fetch_strategy(strategy_key, output_dir="artifacts/strategies"):
         return None
 
     issue = get_issue(server, user, token, strategy_key,
-                      fields=["summary", "description"])
+                      fields=["summary", "description", "attachment"])
 
     summary = issue["fields"]["summary"]
     description_adf = issue["fields"].get("description")
@@ -359,7 +359,71 @@ def fetch_strategy(strategy_key, output_dir="artifacts/strategies"):
         f.write(f"# {summary}\n\n")
         f.write(markdown)
 
+    # Download UX prototype attachments (HTML files) if UXD marker present
+    _download_prototype_attachments(
+        server, user, token, strategy_key, markdown,
+        issue["fields"].get("attachment", []), output_dir,
+    )
+
     return path
+
+
+def _download_prototype_attachments(server, user, token, strategy_key,
+                                    strategy_text, attachments, output_dir):
+    """Download HTML prototype attachments when UXD support is required.
+
+    Only downloads if the strategy body contains a UXD marker referencing
+    an HTML filename, AND that filename is found among the issue attachments.
+    """
+    if not attachments:
+        return
+
+    # Check for UXD marker in strategy text
+    uxd_required = bool(re.search(
+        r'UXD\s+Support\s*[:\-]?\s*(Required|Yes)',
+        strategy_text, re.IGNORECASE,
+    ))
+    if not uxd_required:
+        return
+
+    # Find referenced HTML filename in strategy text
+    html_ref = re.search(
+        r'(?:file|attached|prototype)[:\s]+\S*?([a-zA-Z0-9_-]+\.html?)\b',
+        strategy_text, re.IGNORECASE,
+    )
+
+    proto_dir = os.path.join(output_dir, "prototypes", strategy_key)
+
+    if html_ref:
+        target_name = html_ref.group(1)
+        matching = [a for a in attachments
+                    if a.get("filename", "").lower() == target_name.lower()]
+        if matching:
+            os.makedirs(proto_dir, exist_ok=True)
+            dest = os.path.join(proto_dir, matching[0]["filename"])
+            if not os.path.exists(dest):
+                print(f"  Downloading prototype: {matching[0]['filename']}")
+                download_attachment(
+                    server, user, token,
+                    matching[0]["content"], dest,
+                )
+            return
+
+    # Fallback: download any HTML attachments if UXD is required
+    html_attachments = [a for a in attachments
+                        if a.get("filename", "").lower().endswith((".html", ".htm"))]
+    if html_attachments:
+        os.makedirs(proto_dir, exist_ok=True)
+        for att in html_attachments:
+            dest = os.path.join(proto_dir, att["filename"])
+            if not os.path.exists(dest):
+                print(f"  Downloading prototype: {att['filename']}")
+                download_attachment(
+                    server, user, token, att["content"], dest,
+                )
+    elif uxd_required:
+        print(f"Warning: UXD Support marked Required for {strategy_key} "
+              f"but no HTML prototype attachment found", file=sys.stderr)
 
 
 def list_strategies(html_content):

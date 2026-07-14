@@ -355,12 +355,13 @@ class TestFetchStrategy:
                                                     "user", "token"))
     def test_calls_jira_with_correct_key(self, mock_env, mock_get, tmp_path):
         mock_get.return_value = {
-            "fields": {"summary": "Title", "description": FAKE_ADF}
+            "fields": {"summary": "Title", "description": FAKE_ADF,
+                        "attachment": []}
         }
         fetch_strategy("RHAISTRAT-2000", output_dir=str(tmp_path))
         mock_get.assert_called_once_with(
             "https://jira.example.com", "user", "token",
-            "RHAISTRAT-2000", fields=["summary", "description"])
+            "RHAISTRAT-2000", fields=["summary", "description", "attachment"])
 
     @patch("fetch_epic.require_env", return_value=(None, None, None))
     def test_returns_none_without_jira_creds(self, mock_env, tmp_path):

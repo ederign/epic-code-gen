@@ -1,0 +1,12 @@
+{
+  "name": "epic-code-gen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Epic code generation pipeline scripts",
+  "scripts": {
+    "parse-prototype": "node scripts/parse_prototype.js"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}
