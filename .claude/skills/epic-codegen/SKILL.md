@@ -19,6 +19,12 @@ task-to-AC coverage check, review steering becomes weighted score aggregation.
 
 **Narration:** between tool calls, narrate at most one short line.
 
+**Working directory:** ALL pipeline script calls (`scripts/*.py`,
+`scripts/*.js`) MUST run from the project root — NOT from `.target-repo/`.
+After dispatching a subagent that works in `.target-repo/`, verify your
+cwd is the project root before running any `python3 scripts/...` command.
+If in doubt, use an absolute path or prefix with `cd /path/to/epic-code-gen &&`.
+
 ## Arguments
 
 Parse `$ARGUMENTS` for:
@@ -504,298 +510,108 @@ subagent alongside findings from the 4 scored reviewers.
 
 If the wiring verifier reports Critical findings, proceed to Step 14 normally.
 
-## Phase 3: Multi-Dimensional Review
+## Phase 3+4: Review, Iterate, Complete
 
-### Step 14: Dispatch Reviewer Agents
+### Step 14: Review-Fix Iteration Loop
 
-Dispatch all 5 agents in parallel (4 scored reviewers + interaction verifier).
+Each iteration runs in a **fresh-context subagent** to prevent context
+bloat from accumulating reviews, triages, and fix results. The parent
+orchestrator stays thin — it only tracks version numbers, scores, and
+the accepted-findings list.
 
-Each agent is a standalone definition in `.claude/agents/`. The orchestrator
-dispatches them — it does not construct reviewer prompts inline.
-
-For each scored dimension (architecture, tests, lint, intent):
-
-```
-Agent:
-  description: "Review ${EPIC_ID} — ${DIMENSION}"
-  agentType: "${DIMENSION}-reviewer"
-  prompt: |
-    Review the code changes for ${EPIC_ID}.
-
-    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-${DIMENSION}.md
-    ${EXTRA_FILES}
-```
-
-Where `${EXTRA_FILES}` is set per dimension:
-- **architecture:** `CLAUDE_MD_FILE = .target-repo/CLAUDE.md`
-- **tests:** (none — reads spec ACs)
-- **lint:** `VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json`
-- **intent:** `EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md` (verifies against original ACs, not just the spec's interpretation)
-
-In parallel, dispatch the interaction verifier (not scored):
+The `iteration-reviewer` agent handles one complete cycle: dispatch
+6 reviewers → score → triage → fix → return result. See
+`.claude/agents/iteration-reviewer.md` for the full procedure.
 
 ```
-Agent:
-  description: "Verify interactions ${EPIC_ID} v${VERSION}"
-  agentType: "interaction-verifier"
-  prompt: |
-    Trace user interactions through the code for ${EPIC_ID} v${VERSION}.
+accepted_findings = []  # JSON array, accumulates across versions
+best_score = 0
+best_version = 1
 
-    DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-    SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    REVIEW_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/review-interactions.md
+for version = 1 to max_iterations:
+
+  # Save version artifacts (quick, stays in parent)
+  cd .target-repo && git diff ${BASE_SHA}..HEAD > \
+    ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+  python3 scripts/validate_target.py .target-repo/ --json > \
+    artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+  cp -r .target-repo/.superpowers/sdd/ \
+    artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/sdd-workspace/ 2>/dev/null
+  python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json \
+    phase=review version=${VERSION}
+
+  # Build prior revision-notes paths for oscillation detection
+  prior_notes = [v1/revision-notes.md .. v{VERSION-1}/revision-notes.md]
+
+  # Dispatch fresh-context iteration subagent
+  Agent:
+    description: "Review and fix ${EPIC_ID} v${VERSION}"
+    agentType: "iteration-reviewer"
+    prompt: |
+      Review code changes for ${EPIC_ID} version ${VERSION}.
+
+      EPIC_ID = ${EPIC_ID}
+      VERSION = ${VERSION}
+      DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+      SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
+      EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
+      VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+      CLAUDE_MD_FILE = .target-repo/CLAUDE.md
+      REVIEWS_DIR = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/
+      ACCEPTED_FINDINGS = ${JSON.stringify(accepted_findings)}
+      PRIOR_REVISION_NOTES = ${prior_notes joined by comma}
+      MAX_ITERATIONS = ${MAX_ITERATIONS}
+
+  # Parse the returned JSON result
+  result = parse(agent_output)
+
+  # Track best version
+  if result.weighted_average > best_score:
+    best_score = result.weighted_average
+    best_version = result.version
+
+  # Update accepted findings from triage
+  accepted_findings = result.accepted_findings
+
+  # Evaluate verdict
+  if result.verdict == "pass":
+    cp v${VERSION}/diff.patch final-diff.patch
+    status = completed
+    epic_status = Generated
+    if --fork-owner and not --dry-run: push and create PR
+    break
+
+  if result.verdict == "incomplete":
+    # Re-dispatch same version (reviewer failed)
+    continue without incrementing version
+
+  if result.fix_applied:
+    # Fix agent created v{VERSION+1}, loop to review it
+    VERSION = result.fix_version
+    continue
+
+  # No fix applied (nothing fixable left)
+  if version >= max_iterations or not result.fix_applied:
+    if best_score >= 7.0:
+      # Near-miss: push best version with human review note
+      git -C .target-repo/ reset --hard <best-version-sha>
+      cp v${best_version}/diff.patch final-diff.patch
+      if --fork-owner and not --dry-run: push and create PR (note: near-miss)
+      status = completed
+      epic_status = Generated
+    else:
+      # Fail: do NOT push code
+      cp v${best_version}/diff.patch best-diff.patch
+      status = exhausted
+      epic_status = Failed
+      report: "Best score was ${best_score} on v${best_version}"
+    break
 ```
 
-The interaction review is NOT scored — findings go to Step 17 triage
-alongside wiring verifier findings.
-
-### Step 15: Aggregate Scores
-
-```bash
-python3 scripts/score_reviews.py artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/ --json
-```
-
-Save score summary to `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/scores.json`.
-
-Update state:
-```bash
-python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json phase=evaluate
-```
-
-### Step 15.5: Write Decision Log
-
-Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/decision-log.md` with the
-scoring results and the verdict path about to be taken. This log is the primary
-artifact for post-run analysis.
-
-```markdown
-# Decision Log — ${EPIC_ID} v${VERSION}
-
-## Timestamp
-<output of: python3 scripts/state.py timestamp>
-
-## Scores
-| Dimension | Score | Findings (C/I/M) | Weight | Weighted |
-|-----------|-------|-------------------|--------|----------|
-| architecture | X.X | C/I/M | 30% | X.XX |
-| tests | X.X | C/I/M | 30% | X.XX |
-| lint | X.X | C/I/M | 20% | X.XX |
-| intent | X.X | C/I/M | 20% | X.XX |
-
-**Weighted Average:** X.X/10
-**Verdict:** pass | near-miss | fail | incomplete
-
-## Decision Path
-<which Step 16 branch will be taken>
-- Version: N of max_iterations
-- Path: pass → PR | near-miss → iterate | fail → iterate | near-miss+exhausted → PR | fail+exhausted → report | incomplete → re-dispatch
-```
-
-Append to this log in subsequent steps (Step 17 triage, Step 18 fix result).
-
-## Phase 4: Iterate or Complete
-
-### Step 16: Evaluate Verdict
-
-Read the scoring result:
-
-**pass** (weighted avg >= 8.0, no dimension < 6.0):
-- Save final diff: `cp v${VERSION}/diff.patch final-diff.patch`
-- Update state: `status=completed`
-- Update epic-task: `status=Generated codegen_branch=epic/${EPIC_ID}`
-- If `--fork-owner` is set and not `--dry-run`, push and create PR:
-  ```bash
-  python3 scripts/push_to_fork.py .target-repo/ epic/${EPIC_ID} --json
-  python3 scripts/create_pr.py <upstream_slug> <fork_owner> epic/${EPIC_ID} \
-      --title "${EPIC_ID}: <epic title>" \
-      --body "<scores summary + link to codegen spec>" \
-      --gh-token-var EPIC_CODEGEN_GITHUB_TOKEN --json
-  ```
-  The PR targets the upstream repo's default branch (auto-detected).
-  Update epic-task: `pr_url=<html_url from result>`
-- Report success with scores and PR URL
-
-**near-miss** (weighted avg >= 7.0, at most one dimension 5.0-5.9):
-- Treat same as fail — iterate to fix
-
-**fail** and version < max_iterations:
-- Proceed to Step 17 (revision)
-
-**near-miss** and version >= max_iterations:
-- Find best version (highest weighted average across all versions)
-- If best version verdict is **near-miss**: push and create PR with a note
-  that human review is needed on code quality findings:
-  ```bash
-  python3 scripts/push_to_fork.py .target-repo/ epic/${EPIC_ID} --json
-  python3 scripts/create_pr.py <upstream_slug> <fork_owner> epic/${EPIC_ID} \
-      --title "${EPIC_ID}: <epic title>" \
-      --body "<scores summary + note: near-miss after N iterations, human review needed>" \
-      --gh-token-var EPIC_CODEGEN_GITHUB_TOKEN --json
-  ```
-  Before pushing, check out the best version's code:
-  `git -C .target-repo/ reset --hard <best-version-sha>`
-  Save best diff as `best-diff.patch` and `final-diff.patch`
-  Update state: `status=completed`
-  Update epic-task: `status=Generated pr_url=<html_url>`
-
-**fail** and version >= max_iterations:
-- **DO NOT push code or create a PR. Failed code must not be published.**
-- Find best version (highest weighted average across all versions)
-- Save best diff as `best-diff.patch`
-- Update state: `status=exhausted`
-- Update epic-task: `status=Failed`
-- Report: "Best score was X.X on vN. Recommend manual intervention."
-
-**incomplete** (missing reviewer dimensions):
-- Re-dispatch missing reviewers
-- Re-aggregate
-
-### Step 17: Prepare Revision
-
-Read ALL reviewer and verifier feedback from files (do not paste into your
-context — Read the files):
-- `v${VERSION}/review-architecture.md`
-- `v${VERSION}/review-tests.md`
-- `v${VERSION}/review-lint.md`
-- `v${VERSION}/review-intent.md`
-- `v${VERSION}/review-wiring.md` (not scored, but findings go to fix subagent)
-- `v${VERSION}/review-interactions.md` (not scored, but findings go to fix subagent)
-
-**Oscillation detection:** If VERSION > 2, also read the revision-notes from
-prior versions (`v1/revision-notes.md` through `v${VERSION-1}/revision-notes.md`).
-Compare each current finding against prior versions' findings. A finding is
-**oscillating** if:
-- It was fixed in a prior version (appeared in vN revision-notes, absent in
-  vN+1 reviews) but reappeared in a later version, OR
-- Fixing it in a prior version caused a contradicting finding in a different
-  reviewer dimension (e.g., architecture said "centralize X" → lint said
-  "duplicate computation of X" after the centralization was done)
-
-Mark oscillating findings as **skip — oscillating** in the revision notes.
-The fix subagent must not touch these areas — fixing them will recreate the
-opposite finding. Focus remaining fix effort on non-oscillating findings.
-
-**Accepted findings carry-forward:** When triage marks a finding as
-ACCEPT (e.g., a valid style choice, a wrapper test that's intentionally
-simple), record it in the revision notes under a dedicated section:
-
-```markdown
-## Accepted Findings (do not re-flag)
-| # | Finding | Dimension | Accepted in | Reason |
-|---|---------|-----------|-------------|--------|
-| 1 | useSecretsAccessReview tests verify only mocked values | tests | v1 | wrapper test is valid |
-```
-
-On subsequent iterations, compare each reviewer finding against the
-accepted list. If a finding matches an accepted entry (same file, same
-concern), mark it **skip — accepted in v{N}** in the revision notes.
-Do NOT fix it, do NOT count it toward the fix list. This prevents
-reviewers from repeatedly penalizing the same accepted decision.
-
-The accepted list accumulates across versions — once accepted, it stays
-accepted unless the triage explicitly revokes it.
-
-**Cross-dimension deduplication:** Compare findings across all 4 scored
-dimensions. If the same finding appears in 2+ dimensions (e.g., "no test
-for error rendering" in both tests and intent), keep it in the most
-relevant dimension and mark duplicates as **skip — duplicate of
-{dimension} #{N}** in the revision notes. The fix subagent addresses each
-finding once; duplicates should not inflate the fix list or the score.
-
-Triage non-oscillating findings for the fix subagent. The script's scores
-and verdict are final — you cannot override them. Your job is to prioritize
-which findings the fix subagent should address:
-
-1. Critical findings first (these cap the dimension score at 5)
-2. Important findings next (each costs 1.5 points)
-3. Minor findings last (each costs 0.5 points)
-
-For pre-existing issues outside the diff (e.g., lint failures in unrelated
-files), note them as "pre-existing — fix subagent should not attempt" so
-the fix agent doesn't waste time on them. These still count toward the
-score — the code must pass clean to score well.
-
-Write `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/revision-notes.md`:
-- Accepted findings (skip — accepted in prior triage, do not re-flag or fix)
-- Oscillating findings (skip — do not fix)
-- Prioritized list of non-oscillating, non-accepted findings to fix
-- For each: what to fix, why, which reviewer flagged it, file:line
-- Pre-existing issues noted separately (not fixable by this pipeline)
-
-Append triage decisions to the decision log
-(`artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/decision-log.md`):
-
-```markdown
-## Triage Decisions
-
-| # | Finding | Dimension | Severity | Disposition | Reason |
-|---|---------|-----------|----------|-------------|--------|
-| 1 | <finding summary> | architecture | Critical | fix | <why> |
-| 2 | <finding summary> | lint | Important | skip — oscillating | <which versions> |
-| 3 | <finding summary> | tests | Minor | skip — pre-existing | outside diff |
-
-## Triage Summary
-- Findings to fix: N (Criticals: N, Importants: N, Minors: N)
-- Oscillating (skip): N
-- Pre-existing (skip): N
-- Total findings across all reviewers: N
-```
-
-Increment version:
-```bash
-python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json version=$((VERSION+1)) phase=implementing
-mkdir -p artifacts/codegen-runs/${EPIC_ID}/v$((VERSION+1))
-```
-
-### Step 18: Re-dispatch Fix Subagent
-
-Dispatch fix subagent:
-
-```
-Agent:
-  description: "Fix ${EPIC_ID} v${VERSION+1}"
-  prompt: |
-    You are fixing review findings for epic ${EPIC_ID}.
-
-    Read the revision notes: artifacts/codegen-runs/${EPIC_ID}/v${PREV}/revision-notes.md
-    Read the codegen spec: artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-    Read the target repo conventions: .target-repo/CLAUDE.md
-
-    Work in: .target-repo/
-
-    Fix ALL items in the revision notes. For each fix:
-    1. Read the current code at the cited file:line
-    2. Apply the fix
-
-    After ALL fixes are applied:
-    3. Run lint/typecheck once
-    4. Run tests once
-    5. Commit all changes in a single commit
-
-    Write your report to: artifacts/codegen-runs/${EPIC_ID}/v${VERSION+1}/implementer-report.md
-
-    Return ONLY (under 15 lines):
-    - Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-    - Commits created
-    - Test summary
-```
-
-After fix subagent completes, append the result to the decision log
-(`artifacts/codegen-runs/${EPIC_ID}/v${PREV_VERSION}/decision-log.md`,
-where PREV_VERSION is the version whose triage triggered this fix):
-
-```markdown
-## Fix Agent Result
-- Status: <DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT>
-- Commits: <count>
-- Tests: <pass | fail — summary>
-- Findings addressed: <N of M from revision notes>
-```
-
-Then go to Step 13 (save artifacts → review → evaluate). Do NOT re-enter
-SDD for targeted fixes.
+**Why this works:** Each `iteration-reviewer` subagent starts with fresh
+context. It reads only the files it needs (diff, spec, reviews). It does
+not inherit the parent's accumulated conversation history. The parent
+only sees the returned JSON — a few lines per iteration.
 
 ## Run Metadata
 
