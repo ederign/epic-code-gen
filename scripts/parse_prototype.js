@@ -601,17 +601,20 @@ async function main() {
 
         const slug = slugify(item.name);
 
-        // Screenshot the scenario content area
-        const contentEl = await page.$('[id*="scenario-content"]');
+        // Screenshot only the scenario content container (not the picker)
+        const contentEl = await page.$(container);
         if (contentEl) {
-          // Scroll to content area first
           await contentEl.scrollIntoViewIfNeeded();
           await page.waitForTimeout(200);
+          await contentEl.screenshot({
+            path: path.join(outputDir, `scenario-${item.index}-${slug}.png`),
+          });
+        } else {
+          await page.screenshot({
+            path: path.join(outputDir, `scenario-${item.index}-${slug}.png`),
+            fullPage: true,
+          });
         }
-        await page.screenshot({
-          path: path.join(outputDir, `scenario-${item.index}-${slug}.png`),
-          fullPage: true,
-        });
 
         const scenarioData = {
           index: item.index,
