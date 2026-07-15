@@ -12,6 +12,9 @@ claude_fifo="/tmp/claude-stream.fifo"
 rm -f "$claude_fifo"
 mkfifo "$claude_fifo"
 
+# Disable background task timeout — subagents can run for hours
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
+
 set +e
 claude -p "${1:?Usage: $0 <prompt>}" \
   --model "${CLAUDE_MODEL:-claude-opus-4-6}" \
