@@ -41,6 +41,7 @@ RUN pip3 install --no-cache-dir pyyaml pytest
 # Playwright for UX prototype parsing (parse_prototype.js)
 # Browsers go to /opt/playwright so both root and claude-ci can access them
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+ENV NODE_PATH=/usr/lib/node_modules
 RUN npm install -g playwright \
     && npx playwright install chromium \
     && dnf install -y --nodocs \
