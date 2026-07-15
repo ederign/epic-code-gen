@@ -39,13 +39,15 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
 RUN pip3 install --no-cache-dir pyyaml pytest
 
 # Playwright for UX prototype parsing (parse_prototype.js)
-# Use --with-deps only on x86_64 (UBI9 has dnf, not apt-get; arm64 fallback fails)
+# Browsers go to /opt/playwright so both root and claude-ci can access them
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN npm install -g playwright \
     && npx playwright install chromium \
     && dnf install -y --nodocs \
         alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage \
         libXrandr mesa-libgbm pango \
-    && dnf clean all
+    && dnf clean all \
+    && chmod -R 755 /opt/playwright
 
 # Non-root user (required by Claude Code)
 RUN useradd -m claude-ci \
