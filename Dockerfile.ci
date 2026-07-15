@@ -46,7 +46,7 @@ RUN npm install -g playwright \
     && npx playwright install chromium \
     && dnf install -y --nodocs \
         alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage \
-        libXrandr mesa-libgbm pango \
+        libXrandr mesa-libgbm pango nspr nss libxkbcommon \
     && dnf clean all \
     && chmod -R 755 /opt/playwright
 
