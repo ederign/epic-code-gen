@@ -1513,6 +1513,15 @@ def process_strategy_ci(strategy_key, server, user, token, args):
         if repo:
             epic["target_repo"] = repo
 
+    # Create epic-task files and fetch strategy (with prototype attachments)
+    # so the inner /epic-codegen skill finds them at artifacts/
+    epic_tasks_dir = os.path.join(args.output_dir, "epic-tasks")
+    strategies_dir = os.path.join(args.output_dir, "strategies")
+    for epic in epics:
+        generate_epic_task_from_jira(epic, epic_tasks_dir)
+    if not args.no_strategy:
+        fetch_strategy(strategy_key, strategies_dir)
+
     if not args.dry_run:
         transition_issue(server, user, token, strategy_key, "In Progress")
         assign_issue(server, user, token, strategy_key,
