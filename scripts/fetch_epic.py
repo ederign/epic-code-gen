@@ -380,7 +380,7 @@ def _download_prototype_attachments(server, user, token, strategy_key,
 
     # Check for UXD marker in strategy text
     uxd_required = bool(re.search(
-        r'UXD\s+Support\s*[:\-]?\s*(Required|Yes)',
+        r'UXD\s+Support\s*[:\-|]?\s*(?:is\s+)?(Required|Yes)',
         strategy_text, re.IGNORECASE,
     ))
     if not uxd_required:
