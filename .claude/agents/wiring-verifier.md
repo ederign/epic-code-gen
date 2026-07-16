@@ -105,5 +105,12 @@ breaks.]
 [Number each finding: 1. **Title**: description with file:line]
 ```
 
-Do NOT include a score in your output. Scores are computed deterministically
-from your findings by a separate script.
+Use EXACTLY `#### Critical`, `#### Important`, `#### Minor` as headings.
+Number findings as `N. **Title**`. Include empty sections if no findings
+at that severity. The triage script parses these patterns.
+
+Your work is complete when REVIEW_FILE exists on disk.
+Do not return a summary — write the file.
+
+Do NOT include a score in your output. This review is not scored —
+findings go to the triage step for the fix agent.

@@ -519,104 +519,97 @@ If the wiring verifier reports Critical findings, proceed to Step 14 normally.
 
 ### Step 14: Review-Fix Iteration Loop
 
-Each iteration runs in a **fresh-context subagent** to prevent context
-bloat from accumulating reviews, triages, and fix results. The parent
-orchestrator stays thin — it only tracks version numbers, scores, and
-the accepted-findings list.
+Each iteration is orchestrated by `scripts/review_cycle.py` — Python
+handles all deterministic work (prompt construction, file polling, scoring).
+The parent stays as a thin dispatcher that reads script output and launches
+agents mechanically. No AI judgment in the dispatch loop.
 
-The `iteration-reviewer` agent handles one complete cycle: dispatch
-6 reviewers → score → triage → fix → return result. See
-`.claude/agents/iteration-reviewer.md` for the full procedure.
+**REVIEW DISPATCH LOOP** — follow this exactly:
 
 ```
-accepted_findings = []  # JSON array, accumulates across versions
+1. python3 scripts/review_cycle.py prompts ${EPIC_ID} ${VERSION}
+2. Parse YAML output. For each agent in agents list:
+   - Build prompt: vars + "\n\nRead " + prompt_file
+       + " and follow all instructions exactly."
+   - Launch as background Agent. Do NOT use agentType/subagent_type.
+3. python3 scripts/review_cycle.py wait ${EPIC_ID} ${VERSION} --max-wait 90
+   - If exit code 3: re-run this command (agents still working)
+4. python3 scripts/review_cycle.py verify ${EPIC_ID} ${VERSION}
+   - If exit code 1: log FAILED dimensions, re-dispatch only those
+     (back to step 1 with --only=<failed dims>)
+5. python3 scripts/review_cycle.py score ${EPIC_ID} ${VERSION}
+6. Read scores.json from version dir
+   - If pass: save final diff, push if configured, done
+   - If incomplete (exit code 2): re-dispatch missing
+     (back to step 1 with --only=<missing dims>)
+   - If fail/near-miss: continue to step 7
+7. triage_vars=$(python3 scripts/review_cycle.py triage-prompt \
+     ${EPIC_ID} ${VERSION})
+8. Launch Agent:
+   prompt = triage_vars + "\n\nRead .claude/agents/iteration-reviewer.md
+     and follow all instructions exactly."
+   Do NOT use agentType.
+9. Parse triage result JSON
+   - If fix_applied: VERSION = fix_version, go to step 1
+   - Else: break (nothing fixable)
+```
+
+**Why no agentType:** Reviewer agents are defined with `tools: Read, Glob,
+Grep` — when dispatched with `agentType`, they cannot write review files.
+By dispatching WITHOUT `agentType`, agents get full tools (including Write)
+while still reading their agent definition file as instructions.
+
+**Iteration state** is tracked by `review_cycle.py` and state files:
+- Version tracking: `tmp/epic-codegen-${EPIC_ID}.json`
+- Accepted findings: `tmp/accepted-findings-${EPIC_ID}.json`
+- All review files: `artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/`
+
+Before entering the dispatch loop, save version artifacts:
+
+```bash
+cd .target-repo && git diff ${BASE_SHA}..HEAD > \
+  ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
+python3 scripts/validate_target.py .target-repo/ --json > \
+  artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+cp -r .target-repo/.superpowers/sdd/ \
+  artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/sdd-workspace/ 2>/dev/null
+python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json \
+  phase=review version=${VERSION}
+```
+
+**After the loop exits:**
+
+```
 best_score = 0
 best_version = 1
 
-for version = 1 to max_iterations:
+# (tracked across iterations by reading scores.json per version)
 
-  # Save version artifacts (quick, stays in parent)
-  cd .target-repo && git diff ${BASE_SHA}..HEAD > \
-    ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-  python3 scripts/validate_target.py .target-repo/ --json > \
-    artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
-  cp -r .target-repo/.superpowers/sdd/ \
-    artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/sdd-workspace/ 2>/dev/null
-  python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json \
-    phase=review version=${VERSION}
+if verdict == "pass":
+  cp v${VERSION}/diff.patch final-diff.patch
+  status = completed
+  epic_status = Generated
+  if --fork-owner and not --dry-run: push and create PR
+  break
 
-  # Build prior revision-notes paths for oscillation detection
-  prior_notes = [v1/revision-notes.md .. v{VERSION-1}/revision-notes.md]
-
-  # Dispatch fresh-context iteration subagent
-  Agent:
-    description: "Review and fix ${EPIC_ID} v${VERSION}"
-    agentType: "iteration-reviewer"
-    prompt: |
-      Review code changes for ${EPIC_ID} version ${VERSION}.
-
-      EPIC_ID = ${EPIC_ID}
-      VERSION = ${VERSION}
-      DIFF_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-      SPEC_FILE = artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md
-      EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
-      VALIDATION_FILE = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
-      CLAUDE_MD_FILE = .target-repo/CLAUDE.md
-      REVIEWS_DIR = artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/
-      ACCEPTED_FINDINGS = ${JSON.stringify(accepted_findings)}
-      PRIOR_REVISION_NOTES = ${prior_notes joined by comma}
-      MAX_ITERATIONS = ${MAX_ITERATIONS}
-
-  # Parse the returned JSON result
-  result = parse(agent_output)
-
-  # Track best version
-  if result.weighted_average > best_score:
-    best_score = result.weighted_average
-    best_version = result.version
-
-  # Update accepted findings from triage
-  accepted_findings = result.accepted_findings
-
-  # Evaluate verdict
-  if result.verdict == "pass":
-    cp v${VERSION}/diff.patch final-diff.patch
-    status = completed
-    epic_status = Generated
-    if --fork-owner and not --dry-run: push and create PR
-    break
-
-  if result.verdict == "incomplete":
-    # Re-dispatch same version (reviewer failed)
-    continue without incrementing version
-
-  if result.fix_applied:
-    # Fix agent created v{VERSION+1}, loop to review it
-    VERSION = result.fix_version
-    continue
-
-  # No fix applied (nothing fixable left)
-  if version >= max_iterations or not result.fix_applied:
-    if best_score >= 7.0:
-      # Near-miss: push best version with human review note
-      git -C .target-repo/ reset --hard <best-version-sha>
-      cp v${best_version}/diff.patch final-diff.patch
-      if --fork-owner and not --dry-run: push and create PR (note: near-miss)
-      status = completed
-      epic_status = Generated
-    else:
-      # Fail: do NOT push code
-      cp v${best_version}/diff.patch best-diff.patch
-      status = exhausted
-      epic_status = Failed
-      report: "Best score was ${best_score} on v${best_version}"
-    break
+if best_score >= 7.0:
+  # Near-miss: push best version with human review note
+  git -C .target-repo/ reset --hard <best-version-sha>
+  cp v${best_version}/diff.patch final-diff.patch
+  if --fork-owner and not --dry-run: push and create PR (note: near-miss)
+  status = completed
+  epic_status = Generated
+else:
+  # Fail: do NOT push code
+  cp v${best_version}/diff.patch best-diff.patch
+  status = exhausted
+  epic_status = Failed
+  report: "Best score was ${best_score} on v${best_version}"
 ```
 
-**Why this works:** Each `iteration-reviewer` subagent starts with fresh
-context. It reads only the files it needs (diff, spec, reviews). It does
-not inherit the parent's accumulated conversation history. The parent
-only sees the returned JSON — a few lines per iteration.
+**Context recovery:** If context compresses mid-loop, `review_cycle.py
+dispatch-context` re-injects the dispatch loop with current EPIC_ID and
+VERSION. This is wired into settings.json as a SessionStart hook.
 
 ## Run Metadata
 
@@ -688,11 +681,11 @@ Artifacts are files. They never enter your context as inline text.
 | progress.md | SDD | SDD on resume |
 | diff.patch | Orchestrator (git diff) | All reviewer agents |
 | validation.json | validate_target.py | Lint reviewer agent |
-| review-{arch,tests,lint,intent}.md | Reviewer agents | score_reviews.py (scoring), Orchestrator (triage) |
-| review-wiring.md | Wiring verifier | Orchestrator (triage only, not scored) |
-| review-interactions.md | Interaction verifier | Orchestrator (triage only, not scored) |
-| revision-notes.md | Orchestrator | Fix subagent |
-| decision-log.md | Orchestrator | Post-run analysis (not consumed by pipeline) |
+| review-{arch,tests,lint,intent}.md | Reviewer agents (via review_cycle.py dispatch) | score_reviews.py (scoring), triage agent |
+| review-wiring.md | Wiring verifier (via review_cycle.py dispatch) | Triage agent (not scored) |
+| review-interactions.md | Interaction verifier (via review_cycle.py dispatch) | Triage agent (not scored) |
+| revision-notes.md | Triage agent (iteration-reviewer) | Fix subagent |
+| decision-log.md | Triage agent (iteration-reviewer) | Post-run analysis (not consumed by pipeline) |
 
 ## State Recovery
 
