@@ -524,6 +524,12 @@ handles all deterministic work (prompt construction, file polling, scoring).
 The parent stays as a thin dispatcher that reads script output and launches
 agents mechanically. No AI judgment in the dispatch loop.
 
+**CRITICAL: NEVER write review files yourself. NEVER synthesize reviews
+from your own knowledge. If reviewer agents fail to write files, re-dispatch
+them — do NOT fall back to writing reviews in the parent context. The whole
+point of this design is that reviews come from independent agents, not from
+the orchestrator that wrote the code.**
+
 **REVIEW DISPATCH LOOP** — follow this exactly:
 
 ```
