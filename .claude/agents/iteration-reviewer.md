@@ -26,6 +26,22 @@ ALL pipeline script calls (`scripts/*.py`) MUST run from the project root —
 NOT from `.target-repo/`. Use absolute paths or verify cwd before running
 any `python3 scripts/...` command.
 
+## Progress Logging
+
+At EVERY significant step, append a timestamped line to `tmp/progress.log`:
+
+```bash
+echo "$(date -u '+%H:%M:%S') [iteration-reviewer] <message>" >> tmp/progress.log
+```
+
+Log at minimum:
+- Start of triage for v{VERSION}
+- Each reviewer result received (dimension + finding count)
+- Scoring result (score + verdict)
+- Fix agent dispatch
+- Fix agent completion
+- Iteration result
+
 ## Procedure
 
 ### 1. Read Scores and Reviews
@@ -98,14 +114,25 @@ Agent:
 
     Work in: .target-repo/
 
+    ## Progress Logging
+    At each step, append a line to tmp/progress.log:
+    echo "$(date -u '+%H:%M:%S') [fix-agent] <message>" >> tmp/progress.log
+    Log: each file you edit, lint/test start and result, commit.
+
+    ## Fix Procedure
     Fix ALL items in the revision notes. For each fix:
     1. Read the current code at the cited file:line
     2. Apply the fix
 
     After ALL fixes are applied:
-    3. Run lint/typecheck once
-    4. Run tests once
-    5. Commit all changes in a single commit
+    3. Run lint/typecheck on ONLY the changed files (not the full repo).
+       For JS/TS: use --findRelatedTests or target specific paths.
+       For Go: test only the changed packages.
+    4. Run tests for ONLY the affected test files (not the full suite).
+    5. If lint or tests fail, fix and retry — MAX 2 retry attempts.
+       After 2 failed retries, STOP and report DONE_WITH_CONCERNS.
+       Do NOT keep retrying indefinitely.
+    6. Commit all changes in a single commit.
 
     Write your report to: artifacts/codegen-runs/${EPIC_ID}/v$((VERSION+1))/implementer-report.md
 
@@ -114,6 +141,10 @@ Agent:
     - Commits created
     - Test summary
 ```
+
+**Fix agent timeout:** If the fix agent has not returned after 45 minutes,
+stop waiting and return the current state with `fix_applied: false` and
+`summary: "Fix agent timed out after 45 minutes"`.
 
 After fix agent completes, save v{VERSION+1} artifacts:
 ```bash

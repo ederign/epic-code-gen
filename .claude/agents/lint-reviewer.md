@@ -65,7 +65,7 @@ Write your review to `REVIEW_FILE` with this structure:
 | typecheck | pass/fail | |
 | test | pass/fail | |
 
-### Code Quality Findings
+### Findings
 
 #### Critical
 

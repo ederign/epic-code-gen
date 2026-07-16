@@ -530,6 +530,12 @@ them — do NOT fall back to writing reviews in the parent context. The whole
 point of this design is that reviews come from independent agents, not from
 the orchestrator that wrote the code.**
 
+**Progress logging:** At each numbered step below, append a line to
+`tmp/progress.log` so CI trace shows subagent activity:
+```bash
+echo "$(date -u '+%H:%M:%S') [orchestrator] <step description>" >> tmp/progress.log
+```
+
 **REVIEW DISPATCH LOOP** — follow this exactly:
 
 ```
