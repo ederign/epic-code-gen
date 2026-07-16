@@ -37,7 +37,7 @@ def _epic(epic_id, strategy_key="RHAISTRAT-1", deps=None, **kwargs):
     return data
 
 
-def _args(data_repo, dry_run=False):
+def _args(data_repo, dry_run=False, no_strategy=False):
     return SimpleNamespace(
         data_repo=str(data_repo),
         dry_run=dry_run,
@@ -47,6 +47,7 @@ def _args(data_repo, dry_run=False):
         run_script=None,
         timeout=60,
         log_dir="pipeline-runs",
+        no_strategy=no_strategy,
     )
 
 
@@ -368,3 +369,93 @@ class TestCIStateMachine:
         assert "dry-run" in detail
         loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
         assert loaded is None
+
+
+class TestReadyArtifactFetch:
+    """Verify _ci_handle_ready ensures artifact files before codegen."""
+
+    def test_ready_ensures_artifacts_before_codegen(self, tmp_path,
+                                                     monkeypatch):
+        """Both fetch functions must be called before setup_target_repo."""
+        calls = []
+
+        def fake_generate(epic_data, output_dir):
+            calls.append(("generate", epic_data["epic_id"], output_dir))
+
+        def fake_fetch_strategy(strategy_key, output_dir):
+            calls.append(("fetch_strategy", strategy_key, output_dir))
+            return None
+
+        def fake_setup(epic, args):
+            calls.append(("setup_target_repo",))
+            return False
+
+        monkeypatch.setattr(
+            "run_pipeline.generate_epic_task_from_jira", fake_generate)
+        monkeypatch.setattr(
+            "run_pipeline.fetch_strategy", fake_fetch_strategy)
+        monkeypatch.setattr(
+            "run_pipeline.setup_target_repo", fake_setup)
+
+        epic = _epic("E001", strategy_key="RHAISTRAT-99")
+        state = {"status": "Ready", "current_version": 0}
+        args = _args(tmp_path)
+
+        ci_process_epic(epic, state, args, "srv", "usr", "tok")
+
+        assert calls[0] == ("generate", "E001", "artifacts/epic-tasks")
+        assert calls[1] == (
+            "fetch_strategy", "RHAISTRAT-99", "artifacts/strategies")
+        assert calls[2] == ("setup_target_repo",)
+
+    def test_ready_skips_strategy_when_no_strategy(self, tmp_path,
+                                                     monkeypatch):
+        """fetch_strategy must NOT be called when --no-strategy is set."""
+        calls = []
+
+        def fake_generate(epic_data, output_dir):
+            calls.append("generate")
+
+        def fake_fetch_strategy(strategy_key, output_dir):
+            calls.append("fetch_strategy")
+            return None
+
+        def fake_setup(epic, args):
+            return False
+
+        monkeypatch.setattr(
+            "run_pipeline.generate_epic_task_from_jira", fake_generate)
+        monkeypatch.setattr(
+            "run_pipeline.fetch_strategy", fake_fetch_strategy)
+        monkeypatch.setattr(
+            "run_pipeline.setup_target_repo", fake_setup)
+
+        epic = _epic("E001")
+        state = {"status": "Ready", "current_version": 0}
+        args = _args(tmp_path, no_strategy=True)
+
+        ci_process_epic(epic, state, args, "srv", "usr", "tok")
+
+        assert "generate" in calls
+        assert "fetch_strategy" not in calls
+
+    def test_ready_dry_run_skips_artifact_fetch(self, tmp_path, monkeypatch):
+        """Dry run returns early before any fetch or codegen."""
+        calls = []
+
+        def fake_generate(epic_data, output_dir):
+            calls.append("generate")
+
+        monkeypatch.setattr(
+            "run_pipeline.generate_epic_task_from_jira", fake_generate)
+
+        epic = _epic("E001")
+        state = {"status": "Ready", "current_version": 0}
+        args = _args(tmp_path, dry_run=True)
+
+        action, _, _, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert "dry-run" in detail
+        assert "generate" not in calls

@@ -1064,6 +1064,12 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     if args.dry_run:
         return PROCESSED, "Ready", "Ready", "dry-run"
 
+    epic_tasks_dir = os.path.join(args.output_dir, "epic-tasks")
+    strategies_dir = os.path.join(args.output_dir, "strategies")
+    generate_epic_task_from_jira(epic, epic_tasks_dir)
+    if not args.no_strategy:
+        fetch_strategy(epic.get("strategy_key", ""), strategies_dir)
+
     setup_ok = setup_target_repo(epic, args)
     if not setup_ok:
         state["status"] = "Failed"
