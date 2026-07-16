@@ -92,9 +92,9 @@ Resume the review dispatch loop:
   4. python3 scripts/review_cycle.py verify ${EPIC_ID} ${VERSION}
      - If exit code 1: log FAILED dimensions, re-dispatch only those
   5. python3 scripts/review_cycle.py score ${EPIC_ID} ${VERSION}
+     - If exit code 2: incomplete — re-dispatch missing (step 1 with --only)
   6. Read scores.json
      - If pass: save final diff, push if configured, done
-     - If incomplete: re-dispatch missing (back to step 1 with --only)
      - If fail/near-miss: continue to step 7
   7. triage_vars=$(python3 scripts/review_cycle.py triage-prompt \
 ${EPIC_ID} ${VERSION})
@@ -197,6 +197,8 @@ def cmd_wait(args):
     max_wait = args.max_wait
     vdir = _version_dir(epic_id, version)
 
+    scored_dims = {r["dimension"] for r in REVIEWERS if r["scored"]}
+
     start = time.monotonic()
     while True:
         completed = []
@@ -212,8 +214,20 @@ def cmd_wait(args):
         done = len(completed)
         frac = done / total if total > 0 else 1.0
 
+        scored_pending = [d for d in pending if d in scored_dims]
+
         if not pending:
             print(f"{done}/{total} complete ({', '.join(completed)}). All done.")
+            sys.exit(0)
+
+        if not scored_pending:
+            unscored_pending = [d for d in pending if d not in scored_dims]
+            print(
+                f"{done}/{total} complete ({', '.join(completed)}). "
+                f"All scored dimensions done. "
+                f"Unscored still pending: {', '.join(unscored_pending)}.",
+                flush=True,
+            )
             sys.exit(0)
 
         if frac >= 0.75:

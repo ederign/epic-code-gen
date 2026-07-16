@@ -188,6 +188,21 @@ class TestWait:
             cmd_wait(args)
         assert exc.value.code == 3
 
+    def test_scored_done_unscored_pending_exits_0(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        vdir = _version_dir("TEST-001", "1")
+        for r in REVIEWERS:
+            if r["scored"]:
+                _write_review_file(vdir, r["dimension"])
+        # wiring and interactions NOT written
+        args = _make_args(command="wait", epic_id="TEST-001", version="1",
+                          max_wait=5)
+        with pytest.raises(SystemExit) as exc:
+            cmd_wait(args)
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "All scored dimensions done" in out
+
     def test_progress_output(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         vdir = _version_dir("TEST-001", "1")

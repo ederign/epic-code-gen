@@ -538,10 +538,10 @@ agents mechanically. No AI judgment in the dispatch loop.
    - If exit code 1: log FAILED dimensions, re-dispatch only those
      (back to step 1 with --only=<failed dims>)
 5. python3 scripts/review_cycle.py score ${EPIC_ID} ${VERSION}
+   - If exit code 2: incomplete — re-dispatch missing
+     (back to step 1 with --only=<missing dims>)
 6. Read scores.json from version dir
    - If pass: save final diff, push if configured, done
-   - If incomplete (exit code 2): re-dispatch missing
-     (back to step 1 with --only=<missing dims>)
    - If fail/near-miss: continue to step 7
 7. triage_vars=$(python3 scripts/review_cycle.py triage-prompt \
      ${EPIC_ID} ${VERSION})
