@@ -334,7 +334,8 @@ class TestInvokeCodegen:
         mock_run.return_value = mock.MagicMock(returncode=0)
         meta = tmp_path / "codegen-runs" / "RHOAIENG-72103"
         meta.mkdir(parents=True)
-        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        (meta / "v1").mkdir()
+        (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(output_dir=str(tmp_path))
         result = invoke_codegen("RHOAIENG-72103", args)
 
@@ -351,7 +352,8 @@ class TestInvokeCodegen:
         mock_run.return_value = mock.MagicMock(returncode=0)
         meta = tmp_path / "codegen-runs" / "RHOAIENG-72103"
         meta.mkdir(parents=True)
-        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        (meta / "v1").mkdir()
+        (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(run_script="custom/run.sh",
                           output_dir=str(tmp_path))
         result = invoke_codegen("RHOAIENG-72103", args)
@@ -367,7 +369,8 @@ class TestInvokeCodegen:
         mock_run.return_value = mock.MagicMock(returncode=0)
         meta = tmp_path / "codegen-runs" / "A-1"
         meta.mkdir(parents=True)
-        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        (meta / "v1").mkdir()
+        (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(max_iterations=5, output_dir=str(tmp_path))
         invoke_codegen("A-1", args)
 
@@ -380,7 +383,8 @@ class TestInvokeCodegen:
         mock_run.return_value = mock.MagicMock(returncode=0)
         meta = tmp_path / "codegen-runs" / "A-1"
         meta.mkdir(parents=True)
-        (meta / "run-metadata.yaml").write_text("status: completed\n")
+        (meta / "v1").mkdir()
+        (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(fork_owner="dora-the-ai-coder",
                           output_dir=str(tmp_path))
         invoke_codegen("A-1", args)

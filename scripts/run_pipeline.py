@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import glob
 import json
 import logging
 import os
@@ -558,18 +559,17 @@ def invoke_codegen(epic_id, args):
             env=env,
         )
 
-        run_meta = os.path.join(
-            args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
-        has_artifacts = os.path.exists(run_meta)
+        epic_run_dir = os.path.join(
+            args.output_dir, "codegen-runs", epic_id)
+        has_artifacts = any(
+            glob.glob(os.path.join(epic_run_dir, "v*", "diff.patch"))
+        ) if os.path.isdir(epic_run_dir) else False
 
-        if has_artifacts:
-            status = _read_run_status(run_meta)
-            if status == "completed":
-                if result.returncode != 0:
-                    print(f"  Note: exit code {result.returncode} but "
-                          f"artifacts show completed — treating as success")
-                print(f"  Result: SUCCESS")
-                return True
+        if has_artifacts and result.returncode != 0:
+            print(f"  Note: exit code {result.returncode} but "
+                  f"artifacts produced — treating as success")
+            print(f"  Result: SUCCESS")
+            return True
 
         if result.returncode != 0:
             print(f"  Result: FAILED (exit code {result.returncode})",
