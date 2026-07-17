@@ -1458,10 +1458,10 @@ def _create_pr_for_epic(epic, state, args):
 
     try:
         from create_pr import create_pr
-        from push_to_fork import push_to_fork
+        from push_to_fork import push
 
         branch = f"epic/{epic_id}"
-        push_ok = push_to_fork(TARGET_REPO_DIR, branch)
+        push_ok = push(TARGET_REPO_DIR, branch)
         if not push_ok:
             print(f"  {epic_id}: push to fork failed", file=sys.stderr)
             return None

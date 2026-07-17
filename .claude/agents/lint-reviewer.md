@@ -84,6 +84,10 @@ Use EXACTLY `#### Critical`, `#### Important`, `#### Minor` as headings.
 Number findings as `N. **Title**`. Include empty sections if no findings
 at that severity. The scoring script parses these patterns.
 
+CRITICAL: Your output MUST begin with `### Validation Results` followed by
+`### Findings`. Do NOT use any other heading structure. The scoring script
+parses `### Findings` and its sub-headings — if missing, the score will be 0.
+
 Your work is complete when REVIEW_FILE exists on disk.
 Do not return a summary — write the file.
 

@@ -336,6 +336,10 @@ Agent:
   prompt: |
     Generate a design spec for ${EPIC_ID}.
 
+    You MUST answer your own questions from the context brief, epic body,
+    strategy doc, and prototype analysis. NEVER stop and wait for input —
+    you ARE the human partner. Complete the ENTIRE brainstorming in one pass.
+
     CONTEXT_BRIEF = artifacts/codegen-runs/${EPIC_ID}/context-brief.md
     EPIC_FILE = artifacts/epic-tasks/${EPIC_ID}.md
     STRATEGY_FILE = artifacts/strategies/${STRATEGY_KEY}.md
@@ -345,8 +349,17 @@ Agent:
 
 Wait for the design subagent completion notification. Do NOT poll the
 filesystem for the spec file — the Agent tool notifies you automatically
-when the subagent finishes. Read the generated spec at
-`artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`.
+when the subagent finishes.
+
+Verify `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md` exists and is
+non-empty. If the file is missing or empty:
+1. Log: `echo "$(date -u '+%H:%M:%S') [orchestrator] Spec file missing after first attempt, retrying" >> tmp/progress.log`
+2. Re-dispatch the design-spec-generator with the same prompt plus:
+   `"The spec file was not written. Complete brainstorming and write the spec to SPEC_FILE. Answer all questions yourself."`
+3. If the second attempt also produces no spec file, set status=error and
+   stop: `"Spec generation failed after 2 attempts."`
+
+Read the generated spec at `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`.
 
 ### Step 8.5: Spec Review Gate
 
