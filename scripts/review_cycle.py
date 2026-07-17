@@ -63,7 +63,11 @@ REVIEWERS = [
         "agent": ".claude/agents/intent-reviewer.md",
         "review_file": "review-intent.md",
         "scored": True,
-        "extra_vars": {"EPIC_FILE": "{EPIC_TASKS_DIR}/{EPIC_ID}.md"},
+        "extra_vars": {
+            "EPIC_FILE": "{EPIC_TASKS_DIR}/{EPIC_ID}.md",
+            "UX_ACS_FILE": "{ARTIFACTS_DIR}/{EPIC_ID}/ux-acceptance-criteria.md",
+        },
+        "optional_vars": ["UX_ACS_FILE"],
     },
     {
         "dimension": "wiring",
@@ -149,12 +153,16 @@ def _resolve_vars(reviewer, epic_id, version):
         f"REVIEW_FILE={os.path.join(vdir, reviewer['review_file'])}"
     )
 
+    optional = set(reviewer.get("optional_vars", []))
     for key, template in reviewer.get("extra_vars", {}).items():
         value = template.format(
             VERSION_DIR=vdir,
             EPIC_ID=epic_id,
             EPIC_TASKS_DIR=EPIC_TASKS_DIR,
+            ARTIFACTS_DIR=ARTIFACTS_DIR,
         )
+        if key in optional and not os.path.isfile(value):
+            continue
         lines.append(f"{key}={value}")
 
     return "\n".join(lines) + "\n"

@@ -445,6 +445,24 @@ class TestResolveVars:
         assert "EPIC_FILE=" in result
         assert "TEST-001.md" in result
 
+    def test_intent_ux_acs_omitted_when_missing(self):
+        reviewer = REVIEWERS[3]  # intent
+        result = _resolve_vars(reviewer, "TEST-001", "1")
+        assert "UX_ACS_FILE" not in result
+
+    def test_intent_ux_acs_included_when_present(self, tmp_path, monkeypatch):
+        import review_cycle
+        monkeypatch.setattr(review_cycle, "ARTIFACTS_DIR",
+                            str(tmp_path / "codegen-runs"))
+        epic_dir = tmp_path / "codegen-runs" / "TEST-001"
+        epic_dir.mkdir(parents=True)
+        ux_file = epic_dir / "ux-acceptance-criteria.md"
+        ux_file.write_text("# UX Acceptance Criteria\n")
+        reviewer = REVIEWERS[3]
+        result = _resolve_vars(reviewer, "TEST-001", "1")
+        assert "UX_ACS_FILE=" in result
+        assert "ux-acceptance-criteria.md" in result
+
     def test_no_extra_vars_for_tests(self):
         reviewer = REVIEWERS[1]  # tests
         result = _resolve_vars(reviewer, "TEST-001", "1")

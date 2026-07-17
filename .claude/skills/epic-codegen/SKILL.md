@@ -265,6 +265,29 @@ If UXD marker is found:
 
 If no UXD marker in the strategy body, skip this step silently.
 
+### Step 7.6: Extract UX Acceptance Criteria (if prototype exists)
+
+**Only run this step if Step 7.5 produced prototype analysis output.**
+Check whether `artifacts/codegen-runs/${EPIC_ID}/prototype-analysis/prototype-summary.md`
+exists. If it does not, skip this step silently.
+
+Dispatch the UX AC extraction agent:
+
+```
+Agent:
+  description: "Extract UX ACs ${EPIC_ID}"
+  agentType: "ux-ac-extractor"
+  prompt: |
+    Extract UX acceptance criteria from the prototype analysis.
+
+    PROTOTYPE_DIR = artifacts/codegen-runs/${EPIC_ID}/prototype-analysis
+    OUTPUT_FILE = artifacts/codegen-runs/${EPIC_ID}/ux-acceptance-criteria.md
+```
+
+Wait for the agent completion notification. Read the generated file at
+`artifacts/codegen-runs/${EPIC_ID}/ux-acceptance-criteria.md` for inclusion
+in the context brief.
+
 ### Step 8: Generate Design Spec via Brainstorming
 
 **SEQUENCING: Steps 5-7.5 MUST complete before Step 8 begins.** The context
@@ -325,6 +348,18 @@ this epic needs — file:line, what it does, why it's relevant>
   to reference via the Read tool when visual detail is needed>
 
  If no prototype was parsed, OMIT this entire section.>
+
+## UX Acceptance Criteria (from Step 7.6)
+<If UX ACs were extracted, include the full ux-acceptance-criteria.md content
+ here. These are verifiable UI requirements derived from the UX prototype.
+
+ ### UX Compliance Rule
+ UX acceptance criteria carry the same weight as functional ACs. The spec
+ MUST address every UX AC — if the existing code uses a different control
+ type than what the UX AC specifies (e.g., a dropdown where the prototype
+ shows radio buttons), the spec must include that change explicitly.
+
+ If no UX ACs were extracted, OMIT this entire section.>
 ```
 
 Then dispatch the design spec generator:
@@ -693,7 +728,8 @@ Artifacts are files. They never enter your context as inline text.
 | Artifact | Written by | Read by |
 |----------|-----------|---------|
 | strategy doc | fetch_epic.py (from Jira) | Orchestrator (context brief) |
-| prototype-analysis/ | parse_prototype.js (Step 7.5) | Orchestrator (context brief), brainstorming subagent (screenshots) |
+| prototype-analysis/ | parse_prototype.js (Step 7.5) | Orchestrator (context brief), brainstorming subagent (screenshots), UX AC extractor |
+| ux-acceptance-criteria.md | UX AC extractor agent (Step 7.6) | Orchestrator (context brief), intent reviewer (UX compliance check) |
 | context-brief.md | Orchestrator (Steps 5-7.5 summary) | Brainstorming design subagent |
 | brainstorming-log.md | Brainstorming design subagent | Post-run analysis (not consumed by pipeline) |
 | spec-review-log.md | Spec review gate agent | Post-run analysis (not consumed by pipeline) |

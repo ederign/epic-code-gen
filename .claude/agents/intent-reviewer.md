@@ -16,6 +16,9 @@ Read these files (do not ask for them inline):
 1. **Diff file:** `DIFF_FILE` — the code changes under review
 2. **Spec file:** `SPEC_FILE` — the codegen spec with acceptance criteria
 3. **Epic file:** `EPIC_FILE` — the original epic-task with raw acceptance criteria
+4. **UX ACs file (if provided):** `UX_ACS_FILE` — UX acceptance criteria extracted
+   from the prototype. If this path is provided and the file exists, you MUST
+   verify UX ACs with the same rigor as functional ACs.
 
 The spec is derived from the epic. Your job is to verify against the
 **epic's original ACs**, not just the spec's interpretation. If the spec
@@ -56,6 +59,21 @@ missed or altered an AC, that is a Critical finding.
    If the diff touches anything listed there, flag it as Important.
 7. **Behavioral completeness:** does the diff handle both the happy path AND
    the stated error/nil behavior for each AC?
+8. **UX acceptance criteria verification (if UX_ACS_FILE provided):**
+   For every UX AC (both Global and Scenario-Specific), verify the diff
+   produces code that matches. Read the prototype screenshot files referenced
+   in the UX ACs to confirm visual layout when the structured data is
+   ambiguous. Key checks:
+   - If a UX AC specifies a control type (e.g., Radio group), verify the code
+     uses that exact PatternFly component — not a substitute. If the existing
+     code uses a different control (e.g., SimpleSelect) and the diff does NOT
+     change it, that is a Critical finding: the prototype requires a change
+     that was not implemented.
+   - If a UX AC specifies a disabled state with popover text, verify both the
+     disabled condition AND the popover content in the code.
+   - If a UX AC specifies alert text, verify the exact variant and message.
+   A UX AC violation is scored the same as a functional AC violation — the
+   UX prototype is the source of truth for how the UI must look and behave.
 
 ## Spec Design Decisions
 
@@ -72,8 +90,8 @@ if the implementation contradicts BOTH the AC AND the spec.
 
 | Severity | Examples |
 |----------|----------|
-| Critical | AC completely missing from diff; spec pass criterion fails (code doesn't match what criterion asserts); design decision contradicts epic Scope item; wrong field populated; behavior inverted |
-| Important | AC partially implemented (happy path only, error case missing); pass criterion ambiguous and code takes loosest interpretation; scope creep (feature not in spec added) |
+| Critical | AC completely missing from diff; spec pass criterion fails (code doesn't match what criterion asserts); design decision contradicts epic Scope item; wrong field populated; behavior inverted; UX AC specifies a control type that the code does not use (e.g., prototype shows Radio, code uses SimpleSelect) |
+| Important | AC partially implemented (happy path only, error case missing); pass criterion ambiguous and code takes loosest interpretation; scope creep (feature not in spec added); UX AC partially met (correct component but wrong variant or missing state) |
 | Minor | Naming differs from spec suggestion (but behavior correct); extra logging |
 | NOT a finding | Implementation follows spec's design decision that deviates from AC wording; spec was validated before implementation |
 
@@ -116,6 +134,15 @@ For each spec Component, verify every pass criterion:
 | Epic Scope Item | Spec/Diff Match | Status |
 |-----------------|-----------------|--------|
 | [scope bullet] | [what spec/diff does] | Match / Deviation |
+
+### UX Acceptance Criteria Verification
+
+(Include this section ONLY if UX_ACS_FILE was provided)
+
+| UX AC | Code Match | Status |
+|-------|-----------|--------|
+| UX-G1: [requirement] | [what the code does] | Verified / Failed |
+| UX-S1-1: [requirement] | [what the code does] | Verified / Failed |
 
 ### Scope Creep Check
 
