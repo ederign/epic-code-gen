@@ -1480,7 +1480,7 @@ def _create_pr_for_epic(epic, state, args):
                 body += f"- {d.title()}: {s}/10\n"
 
         pr = create_pr(
-            upstream=target_repo,
+            upstream_slug=target_repo,
             fork_owner=args.fork_owner,
             branch=branch,
             title=f"{epic_id}: {epic.get('title', 'Code generation')}",
