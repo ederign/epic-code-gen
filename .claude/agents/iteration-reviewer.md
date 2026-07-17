@@ -71,6 +71,14 @@ if fixing it caused a contradicting finding. Mark as `skip — oscillating`.
 keep it in the most relevant dimension and mark duplicates as
 `skip — duplicate of {dimension} #{N}`.
 
+**Prototype compliance (non-negotiable):** If a prototype analysis exists in
+`artifacts/codegen-runs/${EPIC_ID}/prototype-analysis/`, any finding that
+identifies a deviation from the prototype UX (wrong control type, missing
+UI element, different layout vs prototype) MUST NOT be accepted. Prototype
+compliance is not optional — do not rationalize around it with "risks
+regressions" or "functional intent met." The prototype defines the required
+UX; if the code deviates, it must be fixed.
+
 **Triage remaining findings:**
 1. Critical findings first (cap dimension score at 5)
 2. Important findings next (each costs 1.5 points)
@@ -111,6 +119,7 @@ Agent:
     Read the revision notes: ${REVIEWS_DIR}/revision-notes.md
     Read the codegen spec: ${SPEC_FILE}
     Read the target repo conventions: .target-repo/CLAUDE.md
+    Read the prototype screenshots in artifacts/codegen-runs/${EPIC_ID}/prototype-analysis/ (if present) — prototype deviations are the highest priority fixes.
 
     Work in: .target-repo/
 
