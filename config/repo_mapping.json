@@ -7,5 +7,11 @@
   },
   "opendatahub-io/mlflow": {
     "keywords": ["mlflow react", "mlflow/server/js", "mlflow embedded", "prompt registry table", "mlflow ui"]
+  },
+  "ederign/codeflare-sdk": {
+    "keywords": ["codeflare", "codeflare-sdk", "codeflare sdk", "ray cluster", "multi-worker group"]
+  },
+  "ederign/kale": {
+    "keywords": ["kale", "kale extension", "kale jupyterlab", "sample notebook catalog", "kale pipeline"]
   }
 }
