@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
 from datetime import datetime, timezone
 
 log = logging.getLogger("pipeline")
@@ -1487,6 +1488,21 @@ def _create_pr_for_epic(epic, state, args):
             body=body,
         )
         return pr.get("html_url")
+    except urllib.error.HTTPError as e:
+        if e.code == 422 and "already exists" in getattr(
+                e, "error_body", ""):
+            import github_utils
+            upstream_owner, upstream_repo = target_repo.split("/")
+            token = github_utils.require_env()
+            existing = github_utils.find_existing_pr(
+                upstream_owner, upstream_repo,
+                args.fork_owner, branch, token)
+            if existing:
+                url = existing.get("html_url")
+                print(f"  {epic_id}: PR already exists: {url}")
+                return url
+        print(f"  {epic_id}: PR creation error: {e}", file=sys.stderr)
+        return None
     except (ImportError, Exception) as e:
         print(f"  {epic_id}: PR creation error: {e}", file=sys.stderr)
         return None

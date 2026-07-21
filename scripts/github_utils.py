@@ -271,6 +271,25 @@ def create_pull_request(upstream_owner, upstream_repo, head_owner, branch,
     )
 
 
+def find_existing_pr(upstream_owner, upstream_repo, head_owner, branch, token):
+    """Find an open PR from head_owner:branch to upstream.
+
+    Returns PR dict (number, html_url, state) or None.
+    """
+    head = f"{head_owner}:{branch}"
+    try:
+        prs = api_call_with_retry(
+            f"/repos/{upstream_owner}/{upstream_repo}/pulls"
+            f"?head={head}&state=open",
+            token,
+        )
+        if prs:
+            return prs[0]
+    except Exception:
+        pass
+    return None
+
+
 # ─── PR Review Operations ────────────────────────────────────────────────────
 
 def get_pr_files(owner, repo, pull_number, token):
