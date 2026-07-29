@@ -1,5 +1,6 @@
 """Tests for score_reviews.py."""
 
+import json
 import os
 import sys
 
@@ -486,3 +487,81 @@ class TestFormatReport:
         result = score_reviews(reviews_dir)
         report = format_report(result)
         assert "1/2/3" in report
+
+
+class TestValidationEvidenceGate:
+    """A validation.json that isn't validate_target.py output must not support
+    a pass. RHAI-75 shipped a Prettier failure because a hand-written
+    `{"tests_total": 35, "success": true}` document read as evidence and the
+    lint dimension was scored 8.0 without lint ever running.
+    """
+
+    PASSING_REVIEWS = {
+        "review-architecture.md": "## Findings\n\nNo findings.\n",
+        "review-tests.md": "## Findings\n\nNo findings.\n",
+        "review-lint.md": "## Findings\n\nNo findings.\n",
+        "review-intent.md": "## Findings\n\nNo findings.\n",
+    }
+
+    def _reviews_dir(self, tmp_path, validation=None):
+        for name, body in self.PASSING_REVIEWS.items():
+            (tmp_path / name).write_text(body)
+        if validation is not None:
+            (tmp_path / "validation.json").write_text(json.dumps(validation))
+        return str(tmp_path)
+
+    def test_genuine_validation_allows_pass(self, tmp_path):
+        d = self._reviews_dir(tmp_path, {
+            "all_passed": True,
+            "checks": [{"name": "lint", "passed": True}],
+        })
+        result = score_reviews(d)
+        assert result["validation"]["status"] == "ok"
+        assert result["verdict"] == "pass"
+
+    def test_fabricated_validation_forces_fail(self, tmp_path):
+        """The exact document RHAI-75 produced."""
+        d = self._reviews_dir(tmp_path, {
+            "tests_total": 35, "tests_passed": 35, "tests_failed": 0,
+            "test_suites_total": 4, "test_suites_passed": 4, "success": True,
+        })
+        result = score_reviews(d)
+        assert result["validation"]["status"] == "foreign"
+        assert result["verdict"] == "fail"
+        assert any("validation.json" in e for e in result["errors"])
+
+    def test_success_true_is_not_evidence(self, tmp_path):
+        """A bare success flag must not stand in for `all_passed`."""
+        d = self._reviews_dir(tmp_path, {"success": True})
+        result = score_reviews(d)
+        assert result["verdict"] == "fail"
+
+    def test_unparseable_validation_forces_fail(self, tmp_path):
+        for name, body in self.PASSING_REVIEWS.items():
+            (tmp_path / name).write_text(body)
+        (tmp_path / "validation.json").write_text("{not json")
+        result = score_reviews(str(tmp_path))
+        assert result["validation"]["status"] == "unreadable"
+        assert result["verdict"] == "fail"
+
+    def test_missing_validation_is_advisory_not_blocking(self, tmp_path):
+        """Older runs predate this check, and the reviewer already flags a
+        missing file as Critical, so absence stays non-blocking."""
+        d = self._reviews_dir(tmp_path, validation=None)
+        result = score_reviews(d)
+        assert result["validation"]["status"] == "missing"
+        assert result["verdict"] == "pass"
+        assert any("validation.json" in e for e in result["errors"])
+
+    def test_genuine_but_failing_validation_still_scores_normally(
+            self, tmp_path):
+        """all_passed False is real evidence; the gate must not double-punish
+        by overriding the findings-based score."""
+        d = self._reviews_dir(tmp_path, {
+            "all_passed": False,
+            "checks": [{"name": "lint", "passed": False}],
+        })
+        result = score_reviews(d)
+        assert result["validation"]["status"] == "ok"
+        # Reviews report no findings, so scoring is unchanged by the gate.
+        assert result["verdict"] == "pass"

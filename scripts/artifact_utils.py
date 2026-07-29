@@ -6,6 +6,7 @@ artifacts. Scripts and skills use this module instead of regex-parsing markdown.
 Frontmatter is stored as YAML between --- delimiters at the top of markdown files.
 """
 
+import json
 import os
 import re
 import sys
@@ -60,6 +61,47 @@ _FOREIGN_CI_STATES = {
     # This module's old capitalised "Running" meant codegen in flight.
     "running": "Generating",
 }
+
+
+# Keys that only validate_target.py produces. A validation.json without them
+# was written by something else — most likely an agent that ran a subset of the
+# checks by hand and summarised the result itself. That document cannot be
+# trusted, because the checks it silently omitted are exactly the ones that
+# would have failed.
+VALIDATION_DOCUMENT_KEYS = ("all_passed", "checks")
+
+
+def validation_document_status(path):
+    """Classify a validation.json as ok, missing, foreign, or unreadable.
+
+    "foreign" is the dangerous case and the reason this exists: a hand-written
+    document declaring `success: true` reads as evidence to a reviewer while
+    containing no lint result at all. A Prettier failure reached a PR that way.
+
+    Returns:
+        tuple: (status, detail) where status is one of
+        "ok" | "missing" | "foreign" | "unreadable".
+    """
+    if not path or not os.path.isfile(path):
+        return "missing", f"no validation document at {path}"
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return "unreadable", f"could not parse {path}: {e}"
+
+    if not isinstance(data, dict):
+        return "foreign", f"{path} is not a JSON object"
+
+    absent = [k for k in VALIDATION_DOCUMENT_KEYS if k not in data]
+    if absent:
+        return "foreign", (
+            f"{path} is missing {', '.join(absent)} — not validate_target.py "
+            "output. Regenerate it with: validate_target.py <repo> "
+            "--out <path>")
+
+    return "ok", None
 
 
 def normalize_ci_status(status, has_pr_url=False):

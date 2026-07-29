@@ -5,13 +5,16 @@ check — conflating the two turns an environment fault into a code-quality
 score, which is how a missing uv became lint=5.0 on a real PR.
 """
 
+import json
 import os
+import subprocess
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from artifact_utils import validation_document_status
 from validate_target import (
     _extract_missing_tool,
     _parse_makefile_rules,
@@ -352,3 +355,65 @@ class TestMakeExitCodeHandling:
         tool = _extract_missing_tool(
             "make: definitely-not-real: No such file or directory")
         assert tool == "definitely-not-real"
+
+
+class TestValidationDocumentStatus:
+    """Classifying a validation.json by whether validate_target.py wrote it."""
+
+    def test_genuine_document_is_ok(self, tmp_path):
+        p = tmp_path / "validation.json"
+        p.write_text(json.dumps({"all_passed": True, "checks": []}))
+        status, detail = validation_document_status(str(p))
+        assert status == "ok"
+        assert detail is None
+
+    def test_rhai75_shaped_document_is_foreign(self, tmp_path):
+        """The real hand-written document that let Prettier through."""
+        p = tmp_path / "validation.json"
+        p.write_text(json.dumps({
+            "tests_total": 35, "tests_passed": 35, "success": True}))
+        status, detail = validation_document_status(str(p))
+        assert status == "foreign"
+        assert "all_passed" in detail and "checks" in detail
+        # The message must say how to fix it.
+        assert "--out" in detail
+
+    def test_partial_document_is_foreign(self, tmp_path):
+        p = tmp_path / "validation.json"
+        p.write_text(json.dumps({"all_passed": True}))
+        assert validation_document_status(str(p))[0] == "foreign"
+
+    def test_absent_file_is_missing(self, tmp_path):
+        status, _ = validation_document_status(str(tmp_path / "nope.json"))
+        assert status == "missing"
+
+    def test_malformed_json_is_unreadable(self, tmp_path):
+        p = tmp_path / "validation.json"
+        p.write_text("{not json")
+        assert validation_document_status(str(p))[0] == "unreadable"
+
+    def test_json_array_is_foreign(self, tmp_path):
+        p = tmp_path / "validation.json"
+        p.write_text("[]")
+        assert validation_document_status(str(p))[0] == "foreign"
+
+
+class TestValidateOutFlag:
+    """--out must write the canonical document, so the skill never needs a
+    shell redirection it could replace with a hand-rolled file."""
+
+    def test_out_writes_canonical_document(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "go.mod").write_text("module x\n")
+        out = tmp_path / "nested" / "validation.json"
+
+        subprocess.run(
+            [sys.executable,
+             os.path.join(os.path.dirname(__file__), "..", "scripts",
+                          "validate_target.py"),
+             str(repo), "--out", str(out)],
+            capture_output=True, text=True, timeout=300)
+
+        assert out.is_file()
+        assert validation_document_status(str(out))[0] == "ok"

@@ -27,6 +27,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from artifact_utils import validation_document_status  # noqa: E402
+
 
 DIMENSION_WEIGHTS = {
     "architecture": 0.30,
@@ -143,7 +146,18 @@ def score_reviews(reviews_dir):
         "verdict": "fail",
         "missing": [],
         "errors": [],
+        "validation": None,
     }
+
+    # Check the lint dimension's evidence deterministically. The lint reviewer
+    # is told to flag a *missing* validation file, but a file that is present
+    # with a foreign schema reads as evidence — one declaring `success: true`
+    # with no lint result at all scored lint 8.0 while Prettier was failing.
+    val_status, val_detail = validation_document_status(
+        os.path.join(reviews_dir, "validation.json"))
+    result["validation"] = {"status": val_status, "detail": val_detail}
+    if val_detail:
+        result["errors"].append(f"validation.json: {val_detail}")
 
     for filename in sorted(os.listdir(reviews_dir)):
         if not filename.startswith("review-") or not filename.endswith(".md"):
@@ -183,7 +197,13 @@ def score_reviews(reviews_dir):
     below_min = [d for d, info in result["dimensions"].items()
                  if info["score"] < MIN_DIMENSION_SCORE]
 
-    if below_floor:
+    # A fabricated or unparseable validation document cannot support a pass:
+    # the lint score derived from it is unevidenced. A merely absent one stays
+    # advisory — the reviewer is already instructed to raise that as Critical,
+    # and older runs predate this check.
+    if val_status in ("foreign", "unreadable"):
+        result["verdict"] = "fail"
+    elif below_floor:
         result["verdict"] = "fail"
     elif weighted_avg >= PASS_THRESHOLD and not below_min:
         result["verdict"] = "pass"

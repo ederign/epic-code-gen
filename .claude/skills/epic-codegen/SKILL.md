@@ -529,8 +529,16 @@ cd .target-repo && git diff ${BASE_SHA}..HEAD > ../artifacts/codegen-runs/${EPIC
 ```
 
 ```bash
-python3 scripts/validate_target.py .target-repo/ --json > artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+python3 scripts/validate_target.py .target-repo/ \
+  --out artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
 ```
+
+**NEVER hand-write `validation.json`.** Use `--out` above; it writes the
+canonical document itself. Do not run a subset of the checks yourself and
+summarise the result — a hand-rolled document such as
+`{"tests_total": 35, "success": true}` omits the checks that would have failed,
+and `score_reviews.py` rejects any `validation.json` lacking `all_passed` and
+`checks`, forcing the verdict to fail.
 
 Copy SDD workspace into artifacts for analysis:
 ```bash
@@ -638,8 +646,8 @@ Before entering the dispatch loop, save version artifacts:
 ```bash
 cd .target-repo && git diff ${BASE_SHA}..HEAD > \
   ../artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/diff.patch
-python3 scripts/validate_target.py .target-repo/ --json > \
-  artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
+python3 scripts/validate_target.py .target-repo/ \
+  --out artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/validation.json
 cp -r .target-repo/.superpowers/sdd/ \
   artifacts/codegen-runs/${EPIC_ID}/v${VERSION}/sdd-workspace/ 2>/dev/null
 python3 scripts/state.py set tmp/epic-codegen-${EPIC_ID}.json \

@@ -51,6 +51,17 @@ Read these files (do not ask for them inline):
   file.
 - If the validation output file is missing, report that as Critical and score
   based on code-reading alone.
+- A validation file that is present but is **not** `validate_target.py` output
+  is as bad as a missing one — report it as Critical. Check for the top-level
+  `all_passed` and `checks` keys. A document with a hand-rolled shape such as
+  `{"tests_total": 35, "tests_passed": 35, "success": true}` was written by an
+  agent that ran some checks itself and summarised them; the checks it omitted
+  are precisely the ones that would have failed. Never treat a `success: true`
+  field as evidence that lint passed — only a `checks` entry named `lint` with
+  `passed: true` is that evidence.
+- Never infer that a check passed from its absence. If there is no `lint` entry
+  in `checks`, lint did not run, and that is a Critical finding rather than a
+  reason to score on style impressions alone.
 
 ## Output Format
 

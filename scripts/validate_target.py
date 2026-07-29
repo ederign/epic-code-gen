@@ -703,6 +703,10 @@ def main():
                         help="Comma-separated check names to run (lint,typecheck,test)")
     parser.add_argument("--timeout", type=int, default=300,
                         help="Per-command timeout in seconds (default: 300)")
+    parser.add_argument("--out", default=None,
+                        help="Write the JSON document to this path. Prefer "
+                             "this over shell redirection so the canonical "
+                             "document is what lands on disk.")
     parser.add_argument("--preflight", action="store_true",
                         help="Only check the toolchain; run no checks. "
                              "Exit 2 when a required tool is missing.")
@@ -732,10 +736,18 @@ def main():
     try:
         result = validate(args.repo_path, checks=checks, timeout=args.timeout)
 
+        if args.out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)),
+                        exist_ok=True)
+            with open(args.out, "w") as f:
+                json.dump(result, f, indent=2)
+                f.write("\n")
+            print(f"Wrote {args.out}", file=sys.stderr)
+
         if args.json:
             json.dump(result, sys.stdout, indent=2)
             print()
-        else:
+        elif not args.out:
             print(format_report(result))
 
         sys.exit(0 if result["all_passed"] else 1)
