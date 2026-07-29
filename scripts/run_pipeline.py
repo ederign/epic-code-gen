@@ -1079,6 +1079,25 @@ def _ci_handle_ready(epic, state, args, server, user, token):
             args.data_repo, epic["strategy_key"], epic_id, state)
         return FAILED, "Ready", "Failed", "target repo setup failed"
 
+    # Toolchain gate. A missing tool makes every validation check unrunnable,
+    # and an unrunnable check gets scored as if the code were bad — which is
+    # how a missing uv became lint=5.0 and a near-miss PR. Refuse to generate
+    # anything against a broken environment; flag it loudly instead.
+    tooling = _check_toolchain(epic, args)
+    if tooling and not tooling["ok"]:
+        missing = ", ".join(tooling["missing"])
+        # Status stays Ready so the epic retries once the image is fixed —
+        # this is an environment fault, not a fault of the epic.
+        state["tooling_missing"] = tooling["missing"]
+        save_epic_state(
+            args.data_repo, epic["strategy_key"], epic_id, state)
+        log.error("%s: toolchain incomplete, refusing to generate: %s",
+                  epic_id, missing)
+        return FAILED, "Ready", "Ready", \
+            f"Toolchain incomplete, no code generated: missing {missing}"
+    if state.pop("tooling_missing", None):
+        save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+
     transition_issue(server, user, token, epic_id, "In Progress")
     assign_issue(server, user, token, epic_id, AUTOMATIONBOT_ACCOUNT_ID)
 
@@ -1406,6 +1425,25 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
             args.data_repo, epic["strategy_key"], epic_id, state)
         return FAILED, "PRChangesRequested", "Failed", \
             f"Review response failed: {errs}"
+
+
+def _check_toolchain(epic, args):
+    """Preflight the target repo's toolchain before generating code.
+
+    Returns:
+        dict from validate_target.preflight(), or None when the check itself
+        could not run (never block codegen on our own inability to look).
+    """
+    target_repo = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", ".target-repo")
+    if not os.path.isdir(target_repo):
+        return None
+    try:
+        from validate_target import preflight
+        return preflight(target_repo)
+    except Exception as e:  # noqa: BLE001 - advisory check, must not crash
+        print(f"  Toolchain preflight unavailable: {e}", file=sys.stderr)
+        return None
 
 
 def _setup_target_for_review_response(epic, state, args, target_repo):

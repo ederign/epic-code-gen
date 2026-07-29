@@ -176,12 +176,13 @@ def run_validation(target_repo):
         )
         if result.stdout.strip():
             data = json.loads(result.stdout.strip())
-            passed = all([
-                data.get("lint_pass", True),
-                data.get("typecheck_pass", True),
-                data.get("tests_pass", True),
-            ])
-            return passed, data
+            # Read the verdict validate_target actually emits. This used to
+            # read lint_pass/typecheck_pass/tests_pass, which that script has
+            # never produced — every .get() fell through to its True default,
+            # so `passed` was unconditionally True and the retry loop below
+            # could never fire. all_passed already accounts for zero
+            # discovered checks and for unrunnable ones.
+            return bool(data.get("all_passed", False)), data
         return result.returncode == 0, {"raw": result.stderr}
     except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
         return False, {"error": str(e)}

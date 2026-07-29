@@ -79,9 +79,36 @@ Detect language and run lint/typecheck/test against the target repo:
 
 ```bash
 python3 scripts/validate_target.py <repo-path> [--json] [--checks lint,test]
+python3 scripts/validate_target.py <repo-path> --preflight [--json]
 ```
 
 Supports Go, Python, TypeScript, JavaScript, Rust. Discovers commands from Makefile targets and package.json scripts.
+
+### Toolchain preflight
+
+`--preflight` checks that every executable the repo's checks need is present,
+and runs nothing. Exit 2 means a required tool is missing (distinct from exit 1,
+a failing check). Required tools come from repo markers (`uv.lock`, `yarn.lock`)
+**and** from variable-expanded Makefile recipes for the exact lint/typecheck/test
+targets that would run — following prerequisites. Only those targets are
+inspected, so an unrelated `docker-build` recipe doesn't gate codegen.
+
+`run_pipeline.py` gates on this before generating: a missing tool means the epic
+is flagged and **no code is generated**. Status stays `Ready` so it retries once
+the image is fixed — a missing tool is an environment fault, not the epic's.
+
+### Unrunnable vs failed
+
+A check that couldn't execute is reported as `unrunnable` with `missing_tool`,
+never as a plain failure — conflating them scores an environment fault as bad
+code (a missing `uv` once produced `lint=5.0`). GNU make exits 2 and prints
+`Error 127` rather than propagating it, so detection reads output patterns as
+well as exit codes. The patterns are deliberately narrow: a bare
+"No such file or directory" is not treated as unrunnable, since a test failing
+on a missing fixture is a real failure.
+
+`all_passed` is false if any check is unrunnable or if none were discovered.
+Consumers must read `all_passed` — never per-check keys.
 
 ## Epic & Strategy Fetching
 

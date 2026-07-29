@@ -21,7 +21,11 @@ RUN dnf install -y --nodocs --allowerasing \
         wget \
     && dnf clean all \
     && alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
+    && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1 \
+    # Unversioned aliases: a target repo's Makefile may call `pip` or `python`
+    # rather than `pip3`/`python3`, which would otherwise exit 127.
+    && ln -sf /usr/bin/pip3 /usr/bin/pip \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 # Go 1.24 (required by mlflow-go)
 ARG TARGETARCH
@@ -37,6 +41,15 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
 
 # Python packages needed by epic-code-gen
 RUN pip3 install --no-cache-dir pyyaml pytest
+
+# uv — required by targets whose Makefiles drive tooling through it
+# (kale: `uv run ruff check`, `uv run pytest`; also epic-code-gen's own
+# `make test-unit`). Without it those recipes exit 127, which is
+# indistinguishable from a genuine lint or test failure.
+# Installed to /usr/local/bin so every user in the image can reach it.
+ENV UV_INSTALL_DIR=/usr/local/bin
+RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
+    && uv --version
 
 # Playwright for UX prototype parsing (parse_prototype.js)
 # Browsers go to /opt/playwright so both root and claude-ci can access them

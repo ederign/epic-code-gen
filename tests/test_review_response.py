@@ -535,3 +535,68 @@ class TestTriageReviewBodies:
         assert "(PR-level review)" in content
         # CI logs must not be truncated to the 200-char inline limit.
         assert "y" * 400 in content
+
+
+class TestRunValidationReadsRealVerdict:
+    """run_validation used to read lint_pass/typecheck_pass/tests_pass, keys
+    validate_target has never emitted. Every .get() fell through to its True
+    default, so `passed` was unconditionally True and the retry loop could
+    never fire — validation was decorative.
+    """
+
+    def _fake_run(self, payload, monkeypatch):
+        import review_response
+
+        class _Result:
+            stdout = json.dumps(payload)
+            stderr = ""
+            returncode = 0
+        monkeypatch.setattr(
+            review_response.subprocess, "run", lambda *a, **k: _Result())
+
+    def test_failing_validation_returns_false(self, monkeypatch):
+        import review_response
+        self._fake_run({
+            "all_passed": False,
+            "checks": [{"name": "test", "passed": False}],
+        }, monkeypatch)
+        passed, data = review_response.run_validation(".")
+        assert passed is False
+
+    def test_passing_validation_returns_true(self, monkeypatch):
+        import review_response
+        self._fake_run({
+            "all_passed": True,
+            "checks": [{"name": "test", "passed": True}],
+        }, monkeypatch)
+        passed, _ = review_response.run_validation(".")
+        assert passed is True
+
+    def test_phantom_keys_no_longer_force_a_pass(self, monkeypatch):
+        """The exact shape validate_target really emits: no *_pass keys."""
+        import review_response
+        self._fake_run({
+            "language": "python",
+            "checks": [{"name": "lint", "passed": False}],
+            "all_passed": False,
+        }, monkeypatch)
+        passed, _ = review_response.run_validation(".")
+        assert passed is False
+
+    def test_unrunnable_check_does_not_pass(self, monkeypatch):
+        import review_response
+        self._fake_run({
+            "all_passed": False,
+            "has_unrunnable": True,
+            "missing_tools": ["uv"],
+        }, monkeypatch)
+        passed, data = review_response.run_validation(".")
+        assert passed is False
+        assert data["missing_tools"] == ["uv"]
+
+    def test_absent_all_passed_defaults_to_failure(self, monkeypatch):
+        """Missing verdict must fail closed, not open."""
+        import review_response
+        self._fake_run({"checks": []}, monkeypatch)
+        passed, _ = review_response.run_validation(".")
+        assert passed is False
