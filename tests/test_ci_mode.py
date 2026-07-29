@@ -459,3 +459,88 @@ class TestReadyArtifactFetch:
         assert action == PROCESSED
         assert "dry-run" in detail
         assert "generate" not in calls
+
+
+class TestReviewResponseNoOpGuard:
+    """A cycle that changes nothing must not consume an iteration.
+
+    Otherwise an unaddressable review (empty CHANGES_REQUESTED body, no
+    inline comments, nothing to rebase) loops forever, burning a version
+    on every run while reporting success.
+    """
+
+    def _setup(self, tmp_path, monkeypatch, response):
+        import run_pipeline
+
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E010", {
+            "status": "PRChangesRequested",
+            "current_version": 3,
+            "max_iterations": 10,
+            "pr_url": "https://github.com/o/r/pull/1",
+            "target_repo": "o/r",
+            "target_branch": "main",
+        })
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "tok")
+        monkeypatch.setattr(
+            run_pipeline, "_setup_target_for_review_response",
+            lambda *a, **k: True)
+        monkeypatch.setattr(
+            run_pipeline, "_copy_codegen_artifacts_to_data_repo",
+            lambda *a, **k: None)
+
+        class _Result:
+            stdout = json.dumps(response)
+            stderr = ""
+        monkeypatch.setattr(
+            run_pipeline.subprocess, "run", lambda *a, **k: _Result())
+        return _epic("E010", target_repo="o/r"), load_epic_state(
+            tmp_path, "RHAISTRAT-1", "E010")
+
+    def test_noop_cycle_does_not_bump_version(self, tmp_path, monkeypatch):
+        epic, state = self._setup(tmp_path, monkeypatch, {
+            "success": True, "comments_processed": 0, "fixes_applied": 0,
+            "rebase": {"rebased": False, "already_current": True,
+                       "base": "main", "conflict_rounds": 0},
+        })
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert to_s == "PRCreated"
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        assert state["current_version"] == 3
+
+    def test_rebase_only_cycle_counts_as_work(self, tmp_path, monkeypatch):
+        epic, state = self._setup(tmp_path, monkeypatch, {
+            "success": True, "comments_processed": 0, "fixes_applied": 0,
+            "rebase": {"rebased": True, "already_current": False,
+                       "base": "main", "conflict_rounds": 2},
+        })
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert "rebased onto main" in detail
+        assert "2 conflict round(s)" in detail
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        assert state["current_version"] == 4
+
+    def test_fixes_cycle_counts_as_work(self, tmp_path, monkeypatch):
+        epic, state = self._setup(tmp_path, monkeypatch, {
+            "success": True, "comments_processed": 2, "fixes_applied": 2,
+            "rebase": {"rebased": False, "already_current": True,
+                       "base": "main", "conflict_rounds": 0},
+        })
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert "2 fixes applied" in detail
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        assert state["current_version"] == 4

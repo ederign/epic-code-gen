@@ -187,6 +187,26 @@ Scans `*/run-metadata.yaml`, writes `artifacts/codegen-runs/index.json` with
 all runs, total count, and summary by status (completed/exhausted/error).
 Called automatically at the end of every `/epic-codegen` run.
 
+## PR Rebase
+
+Every review-response cycle rebases the epic branch onto the latest upstream
+base before addressing comments, so fixes are authored against current code
+and the PR never sits in a CONFLICTING state.
+
+```bash
+python3 scripts/rebase_pr.py <repo-path> <branch> [--base main] \
+    [--remote origin] [--push-remote fork] [--no-resolve] [--json]
+```
+
+Conflicts are resolved by a Claude subagent that edits only the working tree —
+`rebase_onto_base()` drives the git sequence itself (add / continue / skip /
+abort). A rebase rewrites history, so the result is pushed with
+`--force-with-lease`, never a plain push. `review_response.py` runs this
+automatically; `--skip-rebase` opts out.
+
+A cycle that rebases nothing and finds no actionable comments does not consume
+an iteration — otherwise an unaddressable review loops forever.
+
 ## Review Score Aggregation
 
 Compute scores deterministically from reviewer findings and determine pass/fail:

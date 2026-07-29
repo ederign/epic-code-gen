@@ -315,6 +315,21 @@ def reply_to_review_comment(owner, repo, pull_number, comment_id, body, token):
     )
 
 
+def post_issue_comment(owner, repo, pull_number, body, token):
+    """Post a top-level comment on a PR's conversation timeline.
+
+    Used to answer a review body, which has no inline thread to reply to.
+
+    Returns the created comment dict, or None on error.
+    """
+    return api_call_with_retry(
+        f"/repos/{owner}/{repo}/issues/{pull_number}/comments",
+        token,
+        body={"body": body},
+        method="POST",
+    )
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():

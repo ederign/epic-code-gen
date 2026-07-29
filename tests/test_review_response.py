@@ -16,8 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from pr_lifecycle import (
     compute_diff_scope,
     filter_unprocessed_comments,
+    filter_unprocessed_reviews,
     is_comment_in_scope,
     load_processed_comment_ids,
+    review_to_comment,
     _parse_patch_lines,
 )
 
@@ -429,3 +431,107 @@ class TestLoadReviewConfig:
         assert "bot_reviewers" in config
         assert "our_user" in config
         assert "coderabbitai" in config["bot_reviewers"]
+
+
+class TestFilterUnprocessedReviews:
+    """Top-level review bodies must be treated as actionable feedback.
+
+    A reviewer who requests changes in the review body with no inline
+    comments was previously ignored entirely, producing a no-op loop.
+    """
+
+    def _review(self, rid, user, state, body, **kw):
+        r = {"id": rid, "user": user, "state": state, "body": body,
+             "submitted_at": "2026-07-29T13:34:48Z"}
+        r.update(kw)
+        return r
+
+    def test_changes_requested_with_body_is_actionable(self):
+        reviews = [self._review(1, "ederign", "CHANGES_REQUESTED",
+                                "fix conflicts and the CI errors")]
+        result = filter_unprocessed_reviews(reviews, set(), "dora-the-ai-coder")
+        assert len(result) == 1
+        assert result[0]["id"] == "review-1"
+        assert result[0]["is_review_body"] is True
+        assert result[0]["path"] is None
+        assert result[0]["review_state"] == "CHANGES_REQUESTED"
+
+    def test_commented_with_body_is_actionable(self):
+        reviews = [self._review(2, "ederign", "COMMENTED", "please also do X")]
+        result = filter_unprocessed_reviews(reviews, set(), "dora-the-ai-coder")
+        assert len(result) == 1
+
+    def test_approved_is_not_actionable(self):
+        reviews = [self._review(3, "ederign", "APPROVED", "looks good")]
+        result = filter_unprocessed_reviews(reviews, set(), "dora-the-ai-coder")
+        assert result == []
+
+    def test_bodiless_review_is_skipped(self):
+        reviews = [self._review(4, "ederign", "CHANGES_REQUESTED", "   ")]
+        result = filter_unprocessed_reviews(reviews, set(), "dora-the-ai-coder")
+        assert result == []
+
+    def test_our_own_review_is_skipped(self):
+        reviews = [self._review(5, "dora-the-ai-coder", "COMMENTED", "Fixed.")]
+        result = filter_unprocessed_reviews(reviews, set(), "dora-the-ai-coder")
+        assert result == []
+
+    def test_already_processed_review_is_skipped(self):
+        reviews = [self._review(6, "ederign", "CHANGES_REQUESTED", "fix it")]
+        result = filter_unprocessed_reviews(
+            reviews, {"review-6"}, "dora-the-ai-coder")
+        assert result == []
+
+    def test_review_ids_do_not_collide_with_comment_ids(self):
+        """Reviews and inline comments are separate GitHub ID spaces."""
+        reviews = [self._review(99, "ederign", "CHANGES_REQUESTED", "fix it")]
+        # 99 as an inline comment id must not mask review 99.
+        result = filter_unprocessed_reviews(reviews, {99}, "dora-the-ai-coder")
+        assert len(result) == 1
+
+
+class TestTriageReviewBodies:
+
+    def test_review_body_is_always_in_scope(self):
+        """It has no file:line, so scope checking cannot apply."""
+        synthetic = review_to_comment(
+            {"id": 7, "user": "ederign", "state": "CHANGES_REQUESTED",
+             "body": "CI is failing", "submitted_at": "2026-07-29T00:00:00Z"})
+        triaged = triage_comments([synthetic], {}, set())
+        assert triaged[0]["action"] == "fix"
+
+    def test_inline_comment_with_no_scope_still_skipped(self):
+        comment = {"id": 8, "user": "ederign", "path": "a.py", "line": 5,
+                   "body": "x", "in_reply_to": None}
+        triaged = triage_comments([comment], {}, set())
+        assert triaged[0]["action"] == "skip_out_of_scope"
+
+    def test_feedback_writer_buckets_review_bodies(self, tmp_path):
+        """path=None must not crash the grouped writer."""
+        synthetic = review_to_comment(
+            {"id": 9, "user": "ederign", "state": "CHANGES_REQUESTED",
+             "body": "make lint fails", "submitted_at": "2026-07-29T00:00:00Z"})
+        inline = {"id": 10, "user": "bot", "path": "a.py", "line": 3,
+                  "body": "nit", "in_reply_to": None, "diff_hunk": ""}
+        triaged = triage_comments([synthetic, inline], {"a.py": {3}}, set())
+
+        out = str(tmp_path / "feedback.md")
+        write_review_feedback(triaged, out)
+        with open(out) as f:
+            content = f.read()
+        assert "(PR-level review)" in content
+        assert "make lint fails" in content
+        assert "[CHANGES_REQUESTED]" in content
+
+    def test_plan_writer_handles_review_bodies(self, tmp_path):
+        synthetic = review_to_comment(
+            {"id": 11, "user": "ederign", "state": "CHANGES_REQUESTED",
+             "body": "y" * 500, "submitted_at": "2026-07-29T00:00:00Z"})
+        triaged = triage_comments([synthetic], {}, set())
+        out = str(tmp_path / "plan.md")
+        write_response_plan(triaged, out)
+        with open(out) as f:
+            content = f.read()
+        assert "(PR-level review)" in content
+        # CI logs must not be truncated to the 200-char inline limit.
+        assert "y" * 400 in content

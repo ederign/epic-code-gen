@@ -1221,6 +1221,7 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
         from pr_lifecycle import (
             get_pr_status, derive_pr_state,
             get_pr_reviews, filter_unprocessed_comments,
+            filter_unprocessed_reviews,
             load_processed_comment_ids,
         )
         gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
@@ -1250,6 +1251,10 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
                     our_user = json.load(f).get("our_user", our_user)
             unprocessed = filter_unprocessed_comments(
                 reviews_data["comments"], processed_ids, our_user)
+            # Review bodies count too — a reviewer can request changes with
+            # no inline comments at all.
+            unprocessed += filter_unprocessed_reviews(
+                reviews_data["reviews"], processed_ids, our_user)
             if unprocessed:
                 new_state = "PRChangesRequested"
 
@@ -1341,6 +1346,9 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         "--version", str(next_version),
         "--json",
     ]
+    base_branch = state.get("target_branch") or epic.get("target_branch")
+    if base_branch:
+        cmd += ["--base-branch", base_branch]
     if args.dry_run:
         cmd.append("--dry-run")
 
@@ -1360,14 +1368,35 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
 
     if response.get("success"):
+        rebase = response.get("rebase") or {}
+        rebased = bool(rebase.get("rebased"))
+        fixes = response.get("fixes_applied", 0)
+        processed = response.get("comments_processed", 0)
+
         state["status"] = "PRCreated"
-        state["current_version"] = next_version
         state.setdefault("timestamps", {})["last_run"] = (
             datetime.now(timezone.utc).isoformat())
+
+        # A cycle that changed nothing must not consume an iteration —
+        # otherwise an unaddressable review (e.g. an empty CHANGES_REQUESTED
+        # body) loops forever, burning a version each run.
+        if not processed and not rebased:
+            save_epic_state(
+                args.data_repo, epic["strategy_key"], epic_id, state)
+            return SKIPPED, "PRChangesRequested", "PRCreated", \
+                "No actionable review feedback and nothing to rebase"
+
+        state["current_version"] = next_version
         save_epic_state(
             args.data_repo, epic["strategy_key"], epic_id, state)
-        detail = (f"V{next_version} review response: "
-                  f"{response.get('fixes_applied', 0)} fixes applied")
+        parts = []
+        if rebased:
+            rounds = rebase.get("conflict_rounds", 0)
+            parts.append(
+                f"rebased onto {rebase.get('base')}"
+                + (f" ({rounds} conflict round(s))" if rounds else ""))
+        parts.append(f"{fixes} fixes applied")
+        detail = f"V{next_version} review response: " + ", ".join(parts)
         return PROCESSED, "PRChangesRequested", "PRCreated", detail
     else:
         errs = response.get("errors", ["unknown error"])

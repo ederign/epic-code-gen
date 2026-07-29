@@ -119,6 +119,7 @@ def get_pr_reviews(pr_url, token):
         if not body and state == "COMMENTED":
             continue
         reviews.append({
+            "id": r.get("id"),
             "user": r.get("user", {}).get("login", ""),
             "state": state,
             "body": body,
@@ -277,6 +278,60 @@ def filter_unprocessed_comments(comments, processed_ids, our_user):
         if cid and cid in processed_ids:
             continue
         result.append(c)
+    return result
+
+
+# Review states whose body is a request for work. APPROVED is excluded: an
+# approving reviewer is not asking for changes.
+ACTIONABLE_REVIEW_STATES = ("CHANGES_REQUESTED", "COMMENTED")
+
+
+def review_to_comment(review):
+    """Adapt a top-level review into the comment shape triage expects.
+
+    A review body has no file or line — it is feedback on the PR as a whole
+    (CI failures, conflicts, "please also do X"). Reviews and inline comments
+    live in separate GitHub ID spaces, so the synthetic id is namespaced to
+    keep the two from colliding in pr-replies.json.
+    """
+    return {
+        "id": f"review-{review.get('id')}",
+        "review_id": review.get("id"),
+        "user": review.get("user", ""),
+        "path": None,
+        "line": None,
+        "diff_hunk": "",
+        "commit_id": "",
+        "body": (review.get("body") or "").strip(),
+        "created_at": review.get("submitted_at", ""),
+        "in_reply_to": None,
+        "review_state": review.get("state", ""),
+        "is_review_body": True,
+    }
+
+
+def filter_unprocessed_reviews(reviews, processed_ids, our_user):
+    """Filter to top-level review bodies that still need a response.
+
+    Excludes our own reviews, bodiless reviews, approvals, and any review
+    already replied to. Without this, a reviewer who requests changes in the
+    review body with no inline comments gets silently ignored.
+
+    Returns:
+        list: synthetic comment dicts, ready for triage.
+    """
+    result = []
+    for r in reviews:
+        if r.get("user") == our_user:
+            continue
+        if not (r.get("body") or "").strip():
+            continue
+        if r.get("state") not in ACTIONABLE_REVIEW_STATES:
+            continue
+        synthetic = review_to_comment(r)
+        if synthetic["id"] in processed_ids:
+            continue
+        result.append(synthetic)
     return result
 
 

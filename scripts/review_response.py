@@ -21,16 +21,24 @@ sys.path.insert(0, os.path.dirname(__file__))
 from github_utils import (
     api_call_with_retry,
     get_pr_files,
+    post_issue_comment,
     reply_to_review_comment,
     require_env,
 )
 from pr_lifecycle import (
     compute_diff_scope,
     filter_unprocessed_comments,
+    filter_unprocessed_reviews,
     get_pr_reviews,
     is_comment_in_scope,
     load_processed_comment_ids,
     parse_pr_url,
+    review_to_comment,
+)
+from rebase_pr import (
+    claude_conflict_resolver,
+    push_rebased_branch,
+    rebase_onto_base,
 )
 
 
@@ -57,7 +65,12 @@ def triage_comments(comments, diff_scope, bot_reviewers):
     for c in comments:
         user = c.get("user", "")
         is_bot = user in bot_reviewers
-        in_scope = is_comment_in_scope(c, diff_scope)
+        # A review body is feedback on the PR as a whole, so there is no
+        # file:line to scope-check — it is always actionable.
+        if c.get("is_review_body"):
+            in_scope = True
+        else:
+            in_scope = is_comment_in_scope(c, diff_scope)
 
         if not in_scope:
             action = "skip_out_of_scope"
@@ -78,20 +91,31 @@ def triage_comments(comments, diff_scope, bot_reviewers):
     return triaged
 
 
+GENERAL_BUCKET = "(PR-level review)"
+
+
+def _display_path(comment):
+    """Bucket label for a comment — review bodies have no file path."""
+    return comment.get("path") or GENERAL_BUCKET
+
+
 def write_review_feedback(triaged_comments, output_path):
     """Write raw review comments grouped by file."""
     lines = ["# PR Review Feedback (V2)\n"]
 
     by_file = {}
     for c in triaged_comments:
-        by_file.setdefault(c["path"], []).append(c)
+        by_file.setdefault(_display_path(c), []).append(c)
 
     for path in sorted(by_file.keys()):
         lines.append(f"## `{path}`\n")
         for c in sorted(by_file[path], key=lambda x: x.get("line") or 0):
             loc = f"line {c['line']}" if c.get("line") else "general"
             bot_tag = " [bot]" if c.get("is_bot") else ""
-            lines.append(f"### {c['user']}{bot_tag} ({loc})\n")
+            state_tag = ""
+            if c.get("is_review_body"):
+                state_tag = f" [{c.get('review_state', 'REVIEW')}]"
+            lines.append(f"### {c['user']}{bot_tag}{state_tag} ({loc})\n")
             lines.append(f"{c['body']}\n")
             if c.get("diff_hunk"):
                 lines.append("```diff")
@@ -117,8 +141,11 @@ def write_response_plan(triaged_comments, output_path):
         lines.append("## Fix\n")
         for c in to_fix:
             loc = f"line {c['line']}" if c.get("line") else "general"
-            lines.append(f"- **{c['path']}** ({loc}) — {c['user']}")
-            body_preview = c["body"][:200].replace("\n", " ")
+            lines.append(f"- **{_display_path(c)}** ({loc}) — {c['user']}")
+            # Review bodies carry CI logs and stack traces; truncating to 200
+            # chars would cut the actual failure out of the plan.
+            limit = 4000 if c.get("is_review_body") else 200
+            body_preview = c["body"][:limit].replace("\n", " ")
             lines.append(f"  > {body_preview}")
             lines.append(f"  Action: {c['action']} — {c['reason']}\n")
 
@@ -126,7 +153,7 @@ def write_response_plan(triaged_comments, output_path):
         lines.append("## Skip\n")
         for c in to_skip:
             loc = f"line {c['line']}" if c.get("line") else "general"
-            lines.append(f"- **{c['path']}** ({loc}) — {c['user']}")
+            lines.append(f"- **{_display_path(c)}** ({loc}) — {c['user']}")
             body_preview = c["body"][:200].replace("\n", " ")
             lines.append(f"  > {body_preview}")
             lines.append(f"  Action: {c['action']} — {c['reason']}\n")
@@ -213,8 +240,14 @@ def post_replies(triaged_comments, commit_sha, pr_url, token, dry_run=False):
 
         if not dry_run:
             try:
-                result = reply_to_review_comment(
-                    owner, repo, number, comment_id, body, token)
+                if c.get("is_review_body"):
+                    # No inline thread exists for a review body, so answer on
+                    # the PR conversation instead.
+                    result = post_issue_comment(
+                        owner, repo, number, body, token)
+                else:
+                    result = reply_to_review_comment(
+                        owner, repo, number, comment_id, body, token)
                 if result:
                     reply_record["reply_id"] = result.get("id")
             except Exception as e:
@@ -229,11 +262,14 @@ def post_replies(triaged_comments, commit_sha, pr_url, token, dry_run=False):
 
 def run_review_response(epic_id, pr_url, output_dir="artifacts",
                         target_repo=".target-repo", version=2,
-                        dry_run=False, gh_token_var=None):
+                        dry_run=False, gh_token_var=None,
+                        base_branch=None, fork_remote="fork",
+                        skip_rebase=False):
     """Execute the full V2 review response flow.
 
     Returns:
-        dict: {success, comments_processed, fixes_applied, commit_sha, errors}
+        dict: {success, comments_processed, fixes_applied, commit_sha,
+               rebase, errors}
     """
     token = require_env(gh_token_var)
     config = load_review_config()
@@ -242,6 +278,44 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
     max_retries = config.get("validation_retry_limit", 3)
 
     owner, repo, number = parse_pr_url(pr_url)
+    branch = f"epic/{epic_id}"
+    errors = []
+
+    # 0. Rebase onto upstream before touching anything else. Fixes must be
+    #    authored against current upstream code, and a CONFLICTING PR blocks
+    #    the reviewer regardless of what the comments say.
+    rebase_result = None
+    if skip_rebase:
+        print("Skipping rebase (--skip-rebase).", file=sys.stderr)
+    else:
+        print(f"Rebasing {branch} onto upstream base...", file=sys.stderr)
+        rebase_result = rebase_onto_base(
+            target_repo, branch, base_branch=base_branch,
+            resolver=None if dry_run else claude_conflict_resolver,
+        )
+        if rebase_result["error"]:
+            errors.append(f"Rebase failed: {rebase_result['error']}")
+            print(f"  Rebase FAILED: {rebase_result['error']}",
+                  file=sys.stderr)
+        elif rebase_result["already_current"]:
+            print(f"  Already current with {rebase_result['base']}.",
+                  file=sys.stderr)
+        elif rebase_result["rebased"]:
+            rounds = rebase_result["conflict_rounds"]
+            detail = f" after {rounds} conflict round(s)" if rounds else ""
+            print(f"  Rebased onto {rebase_result['base']}{detail}.",
+                  file=sys.stderr)
+            if not dry_run:
+                push = push_rebased_branch(
+                    target_repo, branch, remote=fork_remote)
+                if push["pushed"]:
+                    print("  Force-pushed rebased branch.", file=sys.stderr)
+                else:
+                    errors.append(f"Rebase push failed: {push['error']}")
+                    print(f"  Rebase push FAILED: {push['error']}",
+                          file=sys.stderr)
+        else:
+            print("  Nothing to rebase.", file=sys.stderr)
 
     # 1. Fetch and filter comments
     print(f"Fetching PR comments from {pr_url}...", file=sys.stderr)
@@ -254,15 +328,21 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
 
     unprocessed = filter_unprocessed_comments(
         all_comments, processed_ids, our_user)
+    # A reviewer who requests changes in the review body with no inline
+    # comments is still requesting changes.
+    unprocessed += filter_unprocessed_reviews(
+        reviews_data["reviews"], processed_ids, our_user)
 
     if not unprocessed:
         print("No unprocessed comments found.", file=sys.stderr)
+        rebased = bool(rebase_result and rebase_result["rebased"])
         return {
-            "success": True,
+            "success": not errors,
             "comments_processed": 0,
             "fixes_applied": 0,
-            "commit_sha": None,
-            "errors": [],
+            "commit_sha": rebase_result["new_head"] if rebased else None,
+            "rebase": rebase_result,
+            "errors": errors,
         }
 
     print(f"Found {len(unprocessed)} unprocessed comment(s).", file=sys.stderr)
@@ -292,9 +372,8 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
     write_response_plan(triaged, plan_path)
     print(f"  Artifacts written to {version_dir}/", file=sys.stderr)
 
-    # 5. Record pre-fix state
+    # 5. Record pre-fix state. Keep any rebase errors already collected.
     commit_sha = None
-    errors = []
 
     if to_fix and not dry_run:
         # Get pre-fix SHA
@@ -399,11 +478,15 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
     print(f"  Posted {len(replies)} replies.", file=sys.stderr)
 
     success = len(errors) == 0
+    if commit_sha is None and rebase_result and rebase_result["rebased"]:
+        # No comment fixes, but the rebase itself is real work that landed.
+        commit_sha = rebase_result["new_head"]
     return {
         "success": success,
         "comments_processed": len(triaged),
         "fixes_applied": len(to_fix),
         "commit_sha": commit_sha,
+        "rebase": rebase_result,
         "errors": errors,
     }
 
@@ -418,7 +501,15 @@ def _build_fix_prompt(plan_path, feedback_path, spec_path, target_repo,
         f"SPEC_FILE = {os.path.abspath(spec_path)}\n"
         f"TARGET_REPO = {os.path.abspath(target_repo)}\n\n"
         "Read the response plan. For each item marked 'fix', apply the "
-        "requested change in the target repo. Commit once at the end with "
+        "requested change in the target repo.\n\n"
+        "Items bucketed under '(PR-level review)' are the reviewer's own "
+        "review body rather than an inline comment. These often quote CI "
+        "output — failing lint, formatter diffs, failing tests. Treat them "
+        "as work items: reproduce the failure locally, fix it, and make the "
+        "named command pass. Do not just acknowledge them.\n\n"
+        "The branch has already been rebased onto the latest upstream base. "
+        "Do not run git rebase, merge, reset, or push.\n\n"
+        "Commit once at the end with "
         f"message: 'fix: address PR review feedback (v{version})'\n"
         "Sign off with --signoff."
     )
@@ -489,6 +580,10 @@ def main():
                         help="Env var for GitHub token")
     parser.add_argument("--dry-run", action="store_true",
                         help="Skip push and PR replies")
+    parser.add_argument("--base-branch", default=None,
+                        help="Base branch to rebase onto (default: detect)")
+    parser.add_argument("--skip-rebase", action="store_true",
+                        help="Don't rebase onto upstream before fixing")
     parser.add_argument("--json", action="store_true",
                         help="Output result as JSON")
     args = parser.parse_args()
@@ -502,6 +597,8 @@ def main():
             version=args.version,
             dry_run=args.dry_run,
             gh_token_var=args.gh_token_var,
+            base_branch=args.base_branch,
+            skip_rebase=args.skip_rebase,
         )
 
         if args.json:
@@ -510,6 +607,15 @@ def main():
             status = "SUCCESS" if result["success"] else "FAILED"
             print(f"\n{'='*50}")
             print(f"Review Response: {status}")
+            rb = result.get("rebase")
+            if rb:
+                if rb["already_current"]:
+                    print(f"Rebase: already current with {rb['base']}")
+                elif rb["rebased"]:
+                    print(f"Rebase: onto {rb['base']}, "
+                          f"{rb['conflict_rounds']} conflict round(s)")
+                else:
+                    print("Rebase: no change")
             print(f"Comments processed: {result['comments_processed']}")
             print(f"Fixes applied: {result['fixes_applied']}")
             if result["commit_sha"]:
