@@ -101,7 +101,10 @@ def detect_required_tools(repo_path, language=None):
        behind `UV := uv`), which no lockfile check would reveal.
 
     Only the targets we actually intend to run are inspected, so an unrelated
-    recipe needing docker or helm does not block codegen.
+    recipe needing docker or helm does not block codegen. Extraction errs
+    towards requiring nothing — repo-local scripts, commands whose failure the
+    recipe swallows, and virtualenv-provided tools are all left out (see
+    _tools_in_recipe_line).
 
     Returns:
         list[str]: executable names, deduplicated, in a stable order.
@@ -149,10 +152,11 @@ def detect_required_tools(repo_path, language=None):
         for command in commands.values():
             match = re.match(r"^make\s+([A-Za-z][A-Za-z0-9_/.-]*)", command)
             if match:
-                tools.extend(
-                    tools_for_target(rules, variables, match.group(1)))
+                tools.extend(tools_for_target(
+                    rules, variables, match.group(1), repo_path))
             else:
-                tools.extend(_tools_in_recipe_line(command, variables))
+                tools.extend(
+                    _tools_in_recipe_line(command, variables, repo_path))
 
     seen = set()
     ordered = []
@@ -239,6 +243,19 @@ _NOT_A_TOOL = {
 # or redirections is parsing noise and must not gate codegen.
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.+-]*$")
 
+# `cmd || true` / `cmd || :` — the recipe carries on regardless, so whatever
+# `cmd` is, its absence cannot break the check.
+_TOLERATED_FALLBACK_RE = re.compile(r"^(?:true|:)$")
+
+# `. .venv/bin/activate` / `source venv/bin/activate`. Everything after this
+# runs inside the virtualenv, whose executables are not on the outer PATH.
+_VENV_ACTIVATE_RE = re.compile(
+    r"(?:^|[;&|]\s*)(?:\.|source)\s+[^\s;&|]*bin/activate\b")
+
+# Shell operators that separate commands within one recipe line. Captured so
+# each command's terminator is known — a `;` ends a command, `&&` does not.
+_SHELL_OPERATOR_RE = re.compile(r"(&&|\|\||[;|])")
+
 
 def _parse_makefile_vars(content):
     """Collect simple Makefile variable assignments (NAME := value)."""
@@ -291,23 +308,85 @@ def _parse_makefile_rules(content):
     return rules
 
 
-def _tools_in_recipe_line(line, variables):
-    """Extract candidate executable names from one recipe line."""
+def _tolerated_commands(commands, operators):
+    """Mark commands whose failure the recipe explicitly swallows.
+
+    A `cmd || true` tail makes `cmd` optional, and the tolerance reaches back
+    through the `&&` / `||` / pipe chain it terminates: if any link fails the
+    chain fails, and that failure is the one being caught. `;` starts an
+    independent command, so tolerance does not cross it.
+    """
+    tolerated = [False] * len(commands)
+    for idx in range(len(commands) - 2, -1, -1):
+        operator = operators[idx]
+        following = commands[idx + 1].strip()
+        if operator == "||" and _TOLERATED_FALLBACK_RE.match(following):
+            tolerated[idx] = True
+        elif operator in ("&&", "||", "|") and tolerated[idx + 1]:
+            tolerated[idx] = True
+    return tolerated
+
+
+def _required_tool_name(candidate, repo_path):
+    """Executable name a command token requires, or None if it requires none.
+
+    A token containing a slash is a file reference — the shell never searches
+    PATH for one — so `./scripts/lint.sh` is the repo's own script, not a
+    toolchain executable. Looking its basename up on PATH would never find
+    `lint.sh` and would block codegen on a perfectly healthy repo, so it is
+    resolved against the repo root instead.
+    """
+    if "/" in candidate:
+        local = os.path.join(repo_path, candidate) if repo_path else candidate
+        if not (os.path.isfile(local) and os.access(local, os.X_OK)):
+            # Missing or not executable: a repo bug, not an environment gap.
+            # No image rebuild can supply it, so blocking on it is pointless.
+            return None
+        # Present in the repo, so nothing has to be installed for it. What the
+        # script itself needs is invisible from here, and guessing is how
+        # false positives creep back in.
+        return None
+
+    base = candidate.strip("\"'")
+    if base in _NOT_A_TOOL or not _TOOL_NAME_RE.match(base):
+        return None
+    return base
+
+
+def _tools_in_recipe_line(line, variables, repo_path=None):
+    """Extract candidate executable names from one recipe line.
+
+    Deliberately conservative: a name wrongly required blocks codegen on a
+    healthy repo (preflight refuses to generate anything), while a name missed
+    only restores the pre-preflight behaviour for that one tool.
+    """
     line = _expand_makefile_vars(line, variables)
     # Strip make's per-line prefixes (@ silent, - ignore-errors, + always-run).
-    line = line.lstrip("@-+ \t")
+    body = line.lstrip("@-+ \t")
+    if "-" in line[:len(line) - len(body)]:
+        # make ignores this recipe's exit status, including the 127 a missing
+        # tool produces, so the repo has already declared it non-essential.
+        return []
+    line = body
+
+    if _VENV_ACTIVATE_RE.search(line):
+        # The virtualenv supplies its own executables; they need not — and
+        # often do not — exist on the PATH we would search.
+        return []
+
+    # Split on shell operators to reach each command's first token, keeping the
+    # operators so `|| true` tolerance can be attributed to the right command.
+    parts = _SHELL_OPERATOR_RE.split(line)
+    commands = parts[0::2]
+    operators = parts[1::2] + [""]
+    tolerated = _tolerated_commands(commands, operators)
 
     tools = []
-    # Split on shell operators to reach each command's first token.
-    for segment in re.split(r"&&|\|\||[;|]", line):
-        segment = segment.strip()
-        if not segment:
-            continue
+    for position, segment in enumerate(commands):
         # `cd dir && cmd` already split; drop a leading `cd` segment.
         tokens = segment.split()
-        if not tokens:
+        if not tokens or tolerated[position]:
             continue
-        candidate = tokens[0]
         # Skip leading VAR=value assignments before the real command.
         idx = 0
         while idx < len(tokens) and re.match(
@@ -318,15 +397,13 @@ def _tools_in_recipe_line(line, variables):
         candidate = tokens[idx]
         if candidate.startswith("$"):
             continue
-        candidate = candidate.strip("\"'")
-        base = os.path.basename(candidate)
-        if base in _NOT_A_TOOL or not _TOOL_NAME_RE.match(base):
-            continue
-        tools.append(base)
+        tool = _required_tool_name(candidate, repo_path)
+        if tool:
+            tools.append(tool)
     return tools
 
 
-def tools_for_target(rules, variables, target, _seen=None):
+def tools_for_target(rules, variables, target, repo_path=None, _seen=None):
     """Executables a Makefile target needs, following its prerequisites."""
     if _seen is None:
         _seen = set()
@@ -336,9 +413,10 @@ def tools_for_target(rules, variables, target, _seen=None):
 
     tools = []
     for prereq in rules[target]["prereqs"]:
-        tools.extend(tools_for_target(rules, variables, prereq, _seen))
+        tools.extend(
+            tools_for_target(rules, variables, prereq, repo_path, _seen))
     for line in rules[target]["recipe"]:
-        tools.extend(_tools_in_recipe_line(line, variables))
+        tools.extend(_tools_in_recipe_line(line, variables, repo_path))
     return tools
 
 

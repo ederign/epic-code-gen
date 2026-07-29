@@ -50,6 +50,17 @@ docker-build:
 \tdocker build -t kale .
 """
 
+# Verbatim shape of kale's real self-install guard, continuation lines and all.
+KALE_SELF_INSTALL_MAKEFILE = """\
+UV := uv
+
+check-uv:
+\t@command -v $(UV) >/dev/null 2>&1 || { \\
+\t\tprintf "uv not found. Installing...\\n"; \\
+\t\tcurl -LsSf https://astral.sh/uv/install.sh | sh; \\
+\t}
+"""
+
 
 class TestMakefileVarExpansion:
 
@@ -62,7 +73,7 @@ class TestMakefileVarExpansion:
         assert "uv" in tools
 
     def test_strips_make_line_prefixes(self):
-        tools = _tools_in_recipe_line("@-ruff check .", {})
+        tools = _tools_in_recipe_line("@ruff check .", {})
         assert tools == ["ruff"]
 
     def test_ignores_shell_builtins(self):
@@ -82,6 +93,78 @@ class TestMakefileVarExpansion:
         tools = _tools_in_recipe_line("cd sub && cargo build", {})
         assert "cargo" in tools
         assert "cd" not in tools
+
+
+class TestFalsePositiveGuards:
+    """A wrongly extracted tool blocks codegen on a healthy repo, so
+    extraction must not require anything the recipe does not truly need."""
+
+    @pytest.mark.parametrize("line", [
+        # Repo-local script: never on PATH, so `lint.sh` would always "miss".
+        "./scripts/lint.sh --strict",
+        "scripts/lint.sh",
+        # Failure explicitly swallowed — the recipe carries on without it.
+        "optional-linter --check || true",
+        "optional-linter --check || :",
+        "cd sub && optional-linter --check || true",
+        "optional-linter --check || fallback-linter || true",
+        # make's `-` prefix ignores the recipe's exit status, 127 included.
+        "-flaky-tool --check",
+        "@-flaky-tool --check",
+        # Tools live inside the virtualenv, not on the PATH we would search.
+        ". .venv/bin/activate && pytest",
+        "source venv/bin/activate && ruff check .",
+        ". ./venv/bin/activate; pytest -q",
+    ])
+    def test_not_required(self, line):
+        assert _tools_in_recipe_line(line, {}) == []
+
+    def test_repo_local_script_present_is_still_not_required(self, tmp_path):
+        """Even when the script exists, its basename is not a PATH tool."""
+        script = tmp_path / "scripts" / "lint.sh"
+        script.parent.mkdir()
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        assert _tools_in_recipe_line(
+            "./scripts/lint.sh --strict", {}, str(tmp_path)) == []
+
+    def test_absolute_path_is_resolved_not_looked_up_on_path(self):
+        """`/usr/bin/env python3` must not turn into a required `env`."""
+        assert _tools_in_recipe_line("/opt/nope/linter --check", {}) == []
+
+    def test_tolerance_does_not_cross_a_semicolon(self):
+        """`;` starts an independent command, which is still required."""
+        tools = _tools_in_recipe_line("ruff check . || true; pytest", {})
+        assert tools == ["pytest"]
+
+
+class TestNoRegressionOnRealTools:
+    """The tools these lines genuinely need must keep gating codegen."""
+
+    @pytest.mark.parametrize("line,expected", [
+        # bash IS the executable here; the script is only its argument.
+        ("bash tools/check.sh", ["bash"]),
+        ("SKIP_HOOK=1 uv sync", ["uv"]),
+        ("cd sub && cargo build", ["cargo"]),
+        ("$(UV) run pytest kale/tests -vv", ["uv"]),
+        # Two-level expansion: JLPM := $(UV) run jlpm.
+        ("cd labextension && $(JLPM) install", ["uv"]),
+        # Unresolved variables are parsing noise, not tools.
+        ("$(UNDEFINED_VAR) check", []),
+    ])
+    def test_extracts_expected_tools(self, line, expected):
+        variables = _parse_makefile_vars(KALE_STYLE_MAKEFILE)
+        assert _tools_in_recipe_line(line, variables) == expected
+
+    def test_self_install_guard_needs_curl_and_sh_but_not_uv(self):
+        """kale's `command -v $(UV) || { curl ... | sh; }` installs uv itself,
+        so uv is only an argument here — requiring it would block wrongly."""
+        variables = _parse_makefile_vars(KALE_SELF_INSTALL_MAKEFILE)
+        rules = _parse_makefile_rules(KALE_SELF_INSTALL_MAKEFILE)
+        tools = tools_for_target(rules, variables, "check-uv")
+        assert "curl" in tools
+        assert "sh" in tools
+        assert "uv" not in tools
 
 
 class TestToolsForTarget:
@@ -140,6 +223,22 @@ class TestDetectRequiredTools:
         tools = detect_required_tools(repo, "go")
         assert "go" in tools
         assert "make" not in tools
+
+    def test_repo_local_lint_script_does_not_gate(self, tmp_path):
+        """A Makefile driving a repo-local script must not require `lint.sh`."""
+        repo = self._write(
+            tmp_path,
+            Makefile="lint:\n\t./scripts/lint.sh --strict\n",
+            pyproject__toml="[project]\nname='x'\n")
+        tools = detect_required_tools(repo, "python")
+        assert "lint.sh" not in tools
+
+    def test_venv_activated_lint_does_not_gate(self, tmp_path):
+        repo = self._write(
+            tmp_path,
+            Makefile="lint:\n\t. .venv/bin/activate && flake8 .\n",
+            pyproject__toml="[project]\nname='x'\n")
+        assert "flake8" not in detect_required_tools(repo, "python")
 
     def test_tools_are_deduplicated(self, tmp_path):
         repo = self._write(
