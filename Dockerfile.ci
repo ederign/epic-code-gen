@@ -48,8 +48,11 @@ RUN pip3 install --no-cache-dir pyyaml pytest
 # indistinguishable from a genuine lint or test failure.
 # Installed to /usr/local/bin so every user in the image can reach it.
 ENV UV_INSTALL_DIR=/usr/local/bin
+# Checked with `test -x` rather than `uv --version`: executing the freshly
+# installed amd64 binary segfaults under qemu when cross-building from arm64.
+# test -x asserts the install landed without running it.
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
-    && uv --version
+    && test -x /usr/local/bin/uv
 
 # Playwright for UX prototype parsing (parse_prototype.js)
 # Browsers go to /opt/playwright so both root and claude-ci can access them
