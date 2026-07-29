@@ -135,7 +135,15 @@ Otherwise, run validation manually:
 python3 scripts/repo_readiness.py .target-repo/
 ```
 
-Record the score and dimension breakdown in `run-metadata.yaml` under a `readiness` key. Proceed regardless of score.
+Record the score and dimension breakdown in `run-metadata.yaml` under a
+`readiness` key — with `merge-run-metadata`, never a whole-file write (see
+**Run Metadata**). Proceed regardless of score.
+
+```bash
+python3 scripts/frontmatter.py merge-run-metadata \
+  artifacts/codegen-runs/${EPIC_ID}/run-metadata.yaml \
+  readiness.score=N readiness.<dimension>=N
+```
 
 ```bash
 python3 scripts/validate_target.py .target-repo/ --json
@@ -391,8 +399,9 @@ non-empty. If the file is missing or empty:
 1. Log: `echo "$(date -u '+%H:%M:%S') [orchestrator] Spec file missing after first attempt, retrying" >> tmp/progress.log`
 2. Re-dispatch the design-spec-generator with the same prompt plus:
    `"The spec file was not written. Complete brainstorming and write the spec to SPEC_FILE. Answer all questions yourself."`
-3. If the second attempt also produces no spec file, set status=error and
-   stop: `"Spec generation failed after 2 attempts."`
+3. If the second attempt also produces no spec file, set `status=error` in the
+   tmp state file, merge `codegen_outcome=error` into run-metadata, and stop:
+   `"Spec generation failed after 2 attempts."`
 
 Read the generated spec at `artifacts/codegen-runs/${EPIC_ID}/codegen-spec.md`.
 
@@ -647,7 +656,7 @@ best_version = 1
 
 if verdict == "pass":
   cp v${VERSION}/diff.patch final-diff.patch
-  status = completed
+  codegen_outcome = completed        # run-metadata (never `status`)
   epic_status = Generated
   if --fork-owner and not --dry-run: push and create PR
   break
@@ -657,12 +666,12 @@ if best_score >= 7.0:
   git -C .target-repo/ reset --hard <best-version-sha>
   cp v${best_version}/diff.patch final-diff.patch
   if --fork-owner and not --dry-run: push and create PR (note: near-miss)
-  status = completed
+  codegen_outcome = completed        # run-metadata (never `status`)
   epic_status = Generated
 else:
   # Fail: do NOT push code
   cp v${best_version}/diff.patch best-diff.patch
-  status = exhausted
+  codegen_outcome = exhausted        # run-metadata (never `status`)
   epic_status = Failed
   report: "Best score was ${best_score} on v${best_version}"
 ```
@@ -673,24 +682,43 @@ VERSION. This is wired into settings.json as a SessionStart hook.
 
 ## Run Metadata
 
-At the end of any run (pass, exhausted, or error), write
-`artifacts/codegen-runs/${EPIC_ID}/run-metadata.yaml`:
+At the end of any run (pass, exhausted, or error), record the run facts in
+`artifacts/codegen-runs/${EPIC_ID}/run-metadata.yaml`.
 
-```yaml
-epic_id: ${EPIC_ID}
-target_repo: <url>
-branch: epic/${EPIC_ID}
-language: <detected>
-status: completed|exhausted|failed|error
-versions: <count>
-final_score: <weighted avg of best version>
-scores_by_dimension:
-  architecture: N
-  tests: N
-  lint: N
-  intent: N
-started_at: <timestamp>
+**This file has two writers. You are not allowed to replace it.** The pipeline
+state machine (`scripts/run_pipeline.py`) keeps its own fields in this same
+file — `status`, `current_version`, `max_iterations`, `pr_state`, `timestamps`,
+`scores`. A whole-file write destroys them and deadlocks the epic and
+everything that depends on it (RHAIFIRST-374).
+
+So:
+
+- **NEVER** use Write, `cat >`, or any other whole-file write on
+  `run-metadata.yaml`. Merge with the command below — it is the only
+  sanctioned way to update this file.
+- **NEVER** write a `status:` key. That key belongs to the pipeline alone.
+  Your outcome goes in `codegen_outcome`. The merge command rejects `status=`.
+
+```bash
+python3 scripts/frontmatter.py merge-run-metadata \
+  artifacts/codegen-runs/${EPIC_ID}/run-metadata.yaml \
+  epic_id=${EPIC_ID} \
+  target_repo=<url> \
+  branch=epic/${EPIC_ID} \
+  language=<detected> \
+  codegen_outcome=completed \
+  versions=<count> \
+  final_score=<weighted avg of best version> \
+  scores_by_dimension.architecture=N \
+  scores_by_dimension.tests=N \
+  scores_by_dimension.lint=N \
+  scores_by_dimension.intent=N \
+  started_at=<timestamp>
 ```
+
+`codegen_outcome` is one of `completed`, `exhausted`, `failed`, `error` —
+nothing else. Fields not listed on the command line keep their existing
+values; nothing is dropped.
 
 After writing run-metadata, update the run index:
 
@@ -774,8 +802,10 @@ Do not re-dispatch work that artifacts show as complete.
 - All reviewers fail to produce scores → report error, stop
 - File write fails → report error, stop
 
-In all error cases: update state to `status=error`, update epic-task to
-`status=Failed`, write run-metadata with the error.
+In all error cases: set `status=error` in the tmp state file
+(`scripts/state.py`), update epic-task to `status=Failed`, and merge
+`codegen_outcome=error` into run-metadata (see **Run Metadata** — never write
+`status` there).
 
 ## Rules
 

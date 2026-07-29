@@ -127,7 +127,9 @@ def build_index(codegen_runs_dir):
 
     summary = {}
     for run in runs:
-        status = run.get("status", "unknown")
+        # `codegen_outcome` is the skill's end-of-run word; `status` holds it
+        # only in runs written before the pipeline took that key over.
+        status = run.get("codegen_outcome") or run.get("status") or "unknown"
         summary[status] = summary.get(status, 0) + 1
 
     return {

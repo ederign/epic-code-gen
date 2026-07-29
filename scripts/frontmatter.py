@@ -23,6 +23,12 @@ Usage:
     # Read and validate frontmatter from a file
     python3 scripts/frontmatter.py read artifacts/epic-tasks/RHAISTRAT-1665-E001.md
 
+    # Merge fields into a run-metadata.yaml (never replaces the file, and
+    # refuses `status` — that key belongs to the pipeline state machine)
+    python3 scripts/frontmatter.py merge-run-metadata \\
+        artifacts/codegen-runs/RHAISTRAT-1665-E001/run-metadata.yaml \\
+        codegen_outcome=completed versions=2 final_score=8.6
+
     # Rebuild the epics.md index from all task and review files
     python3 scripts/frontmatter.py rebuild-index [--artifacts-dir artifacts]
 """
@@ -35,6 +41,7 @@ import sys
 from artifact_utils import (
     SCHEMAS,
     get_schema_yaml,
+    merge_run_metadata,
     read_frontmatter,
     read_frontmatter_validated,
     write_frontmatter,
@@ -208,6 +215,53 @@ def cmd_batch_read(args):
     print()
 
 
+def _infer_value(value_str):
+    """Coerce a CLI string to bool/int/float/None without a schema.
+
+    run-metadata.yaml carries free-form run facts (versions, final_score,
+    per-dimension scores), so values are inferred rather than schema-typed.
+    """
+    if value_str.lower() in ("true", "yes"):
+        return True
+    if value_str.lower() in ("false", "no"):
+        return False
+    if value_str.lower() in ("null", "none", "~"):
+        return None
+    for cast in (int, float):
+        try:
+            return cast(value_str)
+        except ValueError:
+            pass
+    return value_str
+
+
+def cmd_merge_run_metadata(args):
+    """Merge fields into a run-metadata.yaml without dropping existing keys."""
+    updates = {}
+    for field_value in args.fields:
+        if "=" not in field_value:
+            print(f"Error: expected field=value, got '{field_value}'",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        field_name, value_str = field_value.split("=", 1)
+        value = _infer_value(value_str)
+
+        if "." in field_name:
+            parent_name, child_name = field_name.split(".", 1)
+            updates.setdefault(parent_name, {})[child_name] = value
+        else:
+            updates[field_name] = value
+
+    try:
+        merged = merge_run_metadata(args.file, updates)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"OK: {args.file} ({len(merged)} keys)")
+
+
 def cmd_rebuild_index(args):
     """Rebuild epics.md index from frontmatter."""
     content = rebuild_index(args.artifacts_dir)
@@ -256,6 +310,18 @@ def main():
     p_batch.add_argument("files", nargs="+",
                          help="Paths to markdown files")
     p_batch.set_defaults(func=cmd_batch_read)
+
+    # merge-run-metadata
+    p_merge = subparsers.add_parser(
+        "merge-run-metadata",
+        help="Merge fields into a run-metadata.yaml (never replaces it)")
+    p_merge.add_argument("file", help="Path to run-metadata.yaml")
+    p_merge.add_argument("fields", nargs="+",
+                         help="Fields as field=value pairs. Use dot notation "
+                              "for nested fields (e.g., "
+                              "scores_by_dimension.tests=8). `status` is "
+                              "rejected — it belongs to the pipeline.")
+    p_merge.set_defaults(func=cmd_merge_run_metadata)
 
     # rebuild-index
     p_rebuild = subparsers.add_parser("rebuild-index",

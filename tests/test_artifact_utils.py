@@ -8,8 +8,13 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from artifact_utils import (
+    CI_STATES,
+    CODEGEN_OUTCOMES,
     SCHEMAS,
     ValidationError,
+    merge_run_metadata,
+    normalize_ci_status,
+    read_codegen_outcome,
     validate,
     apply_defaults,
     get_schema_yaml,
@@ -119,7 +124,7 @@ class TestCodegenRunSchema:
     def _valid_data(self, **overrides):
         data = {
             "epic_id": "RHAISTRAT-1665-E001",
-            "status": "Running",
+            "status": "Generating",
             "iterations": 0,
             "max_iterations": 10,
             "target_repo": "opendatahub-io/odh-dashboard",
@@ -133,6 +138,21 @@ class TestCodegenRunSchema:
         errors = validate(self._valid_data(), "codegen-run")
         assert errors == []
 
+    def test_status_uses_ci_states(self):
+        """One vocabulary: the schema's status enum is the CI state machine's."""
+        for state in CI_STATES:
+            errors = validate(self._valid_data(status=state), "codegen-run")
+            assert errors == [], f"State '{state}' should be valid"
+
+    def test_codegen_outcome_enum(self):
+        for outcome in CODEGEN_OUTCOMES:
+            errors = validate(
+                self._valid_data(codegen_outcome=outcome), "codegen-run")
+            assert errors == [], f"Outcome '{outcome}' should be valid"
+        errors = validate(
+            self._valid_data(codegen_outcome="done"), "codegen-run")
+        assert any("not in" in e for e in errors)
+
     def test_valid_with_validation_dict(self):
         data = self._valid_data(validation={
             "lint_pass": True,
@@ -143,7 +163,8 @@ class TestCodegenRunSchema:
         assert errors == []
 
     def test_invalid_status(self):
-        errors = validate(self._valid_data(status="Pending"), "codegen-run")
+        """The skill's outcome words are not CI states."""
+        errors = validate(self._valid_data(status="completed"), "codegen-run")
         assert any("not in" in e for e in errors)
 
     def test_validation_nested_type_error(self):
@@ -221,7 +242,7 @@ class TestApplyDefaults:
     def test_codegen_run_defaults(self):
         data = {
             "epic_id": "RHAISTRAT-1665-E001",
-            "status": "Running",
+            "status": "Generating",
             "target_repo": "repo",
             "target_branch": "main",
             "codegen_branch": "branch",
@@ -402,3 +423,113 @@ class TestFileDiscovery:
         assert "RHAISTRAT-1665-E001" in content
         assert "9/10" in content
         assert "approve" in content
+
+
+# ─── Run Status Vocabulary ───────────────────────────────────────────────────
+
+class TestNormalizeCIStatus:
+    """Foreign status vocabularies must resolve to canonical CI states."""
+
+    def test_canonical_states_pass_through(self):
+        for state in CI_STATES:
+            assert normalize_ci_status(state) == state
+
+    def test_case_insensitive(self):
+        assert normalize_ci_status("prcreated") == "PRCreated"
+        assert normalize_ci_status("REVIEWPENDING") == "ReviewPending"
+        assert normalize_ci_status(" Done ") == "Done"
+
+    def test_completed_with_pr_is_prcreated(self):
+        assert normalize_ci_status(
+            "completed", has_pr_url=True) == "PRCreated"
+        assert normalize_ci_status(
+            "Completed", has_pr_url=True) == "PRCreated"
+
+    def test_completed_without_pr_is_review_pending(self):
+        assert normalize_ci_status("completed") == "ReviewPending"
+        assert normalize_ci_status("COMPLETED") == "ReviewPending"
+
+    def test_exhausted_and_error_are_failed(self):
+        assert normalize_ci_status("exhausted") == "Failed"
+        assert normalize_ci_status("Exhausted") == "Failed"
+        assert normalize_ci_status("error") == "Failed"
+
+    def test_legacy_running_is_generating(self):
+        assert normalize_ci_status("Running") == "Generating"
+
+    def test_unmappable_returns_none(self):
+        assert normalize_ci_status("banana") is None
+        assert normalize_ci_status("") is None
+        assert normalize_ci_status(None) is None
+        assert normalize_ci_status(7) is None
+
+
+class TestReadCodegenOutcome:
+
+    def test_dedicated_key_wins(self):
+        assert read_codegen_outcome(
+            {"codegen_outcome": "exhausted", "status": "PRCreated"}
+        ) == "exhausted"
+
+    def test_legacy_status_holding_an_outcome(self):
+        assert read_codegen_outcome({"status": "completed"}) == "completed"
+
+    def test_ci_state_is_not_an_outcome(self):
+        assert read_codegen_outcome({"status": "PRCreated"}) is None
+
+    def test_missing(self):
+        assert read_codegen_outcome({}) is None
+        assert read_codegen_outcome(None) is None
+
+
+class TestMergeRunMetadata:
+
+    def test_creates_file_when_absent(self, tmp_path):
+        path = tmp_path / "runs" / "run-metadata.yaml"
+        merged = merge_run_metadata(str(path), {"epic_id": "RHAI-74"})
+        assert path.exists()
+        assert merged["epic_id"] == "RHAI-74"
+
+    def test_preserves_existing_keys(self, tmp_path):
+        path = tmp_path / "run-metadata.yaml"
+        merge_run_metadata(str(path), {
+            "epic_id": "RHAI-74",
+            "current_version": 2,
+            "timestamps": {"created": "t0"},
+        })
+        merge_run_metadata(str(path), {"codegen_outcome": "completed"})
+
+        import yaml as _yaml
+        data = _yaml.safe_load(path.read_text())
+        assert data["current_version"] == 2
+        assert data["timestamps"] == {"created": "t0"}
+        assert data["codegen_outcome"] == "completed"
+
+    def test_nested_mappings_merge_not_replace(self, tmp_path):
+        path = tmp_path / "run-metadata.yaml"
+        merge_run_metadata(str(path), {"timestamps": {"created": "t0"}})
+        merge_run_metadata(str(path), {"timestamps": {"pr_created": "t1"}})
+
+        import yaml as _yaml
+        data = _yaml.safe_load(path.read_text())
+        assert data["timestamps"] == {"created": "t0", "pr_created": "t1"}
+
+    def test_status_is_rejected(self, tmp_path):
+        path = tmp_path / "run-metadata.yaml"
+        with pytest.raises(ValueError) as exc:
+            merge_run_metadata(str(path), {"status": "completed"})
+        assert "pipeline state machine" in str(exc.value)
+        assert not path.exists()
+
+    def test_unknown_outcome_is_rejected(self, tmp_path):
+        path = tmp_path / "run-metadata.yaml"
+        with pytest.raises(ValueError) as exc:
+            merge_run_metadata(str(path), {"codegen_outcome": "finished"})
+        assert "codegen_outcome" in str(exc.value)
+
+    def test_all_valid_outcomes_accepted(self, tmp_path):
+        for outcome in CODEGEN_OUTCOMES:
+            path = tmp_path / f"{outcome}.yaml"
+            merged = merge_run_metadata(
+                str(path), {"codegen_outcome": outcome})
+            assert merged["codegen_outcome"] == outcome

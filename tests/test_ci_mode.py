@@ -544,3 +544,376 @@ class TestReviewResponseNoOpGuard:
         assert "2 fixes applied" in detail
         state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
         assert state["current_version"] == 4
+
+
+class TestForeignStatusNormalisation:
+    """A status from another producer must not deadlock the epic.
+
+    run-metadata.yaml has carried three status vocabularies. An unrecognised
+    value used to fall through to a silent SKIPPED, so the epic was skipped on
+    every run forever and its dependents stayed Blocked while CI exited 0
+    (RHAIFIRST-374).
+    """
+
+    def _pipeline_state(self, **overrides):
+        state = {
+            "status": "completed",
+            "target_repo": "mlflow/mlflow",
+            "target_branch": "main",
+            "current_version": 2,
+            "max_iterations": 10,
+            "timestamps": {"created": "t0", "last_run": "t1"},
+            "scores": {"weighted_average": 8.4},
+        }
+        state.update(overrides)
+        return state
+
+    def _stub_merged_pr(self, monkeypatch):
+        import pr_lifecycle
+        import run_pipeline
+
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "tok")
+        monkeypatch.setattr(pr_lifecycle, "get_pr_status",
+                            lambda url, token: {"merged": True,
+                                                "state": "closed"})
+        monkeypatch.setattr(pr_lifecycle, "derive_pr_state", lambda s: "Done")
+        monkeypatch.setattr(run_pipeline, "transition_issue",
+                            lambda *a, **k: (True, "Done"))
+
+    def test_completed_with_pr_url_is_processed_as_pr_created(
+            self, tmp_path, monkeypatch):
+        self._stub_merged_pr(monkeypatch)
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+            pr_url="https://github.com/org/repo/pull/7"))
+
+        epic = _epic("E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["status"] == "PRCreated"
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, _args(tmp_path), "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert from_s == "PRCreated"
+        assert to_s == "Done"
+
+    def test_completed_without_pr_url_is_review_pending(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        self._pipeline_state())
+
+        epic = _epic("E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["status"] == "ReviewPending"
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, _args(tmp_path), "srv", "usr", "tok")
+
+        # No scores yet for this version — the review handler ran, which is
+        # the point: it is no longer an unrecognised state.
+        assert from_s == "ReviewPending"
+        assert "Waiting" in detail
+
+    def test_completed_without_pr_url_creates_pr_when_scored(
+            self, tmp_path, monkeypatch):
+        import run_pipeline
+
+        created = []
+        monkeypatch.setattr(run_pipeline, "_create_pr_for_epic",
+                            lambda ep, st, ar: created.append(ep["epic_id"])
+                            or "https://github.com/org/repo/pull/9")
+        monkeypatch.setattr(run_pipeline, "transition_issue",
+                            lambda *a, **k: (True, "Review"))
+        monkeypatch.setattr(run_pipeline, "link_pr_to_jira",
+                            lambda *a, **k: None)
+
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        self._pipeline_state(current_version=1))
+
+        scores_dir = tmp_path / "out" / "codegen-runs" / "E001" / "v1"
+        scores_dir.mkdir(parents=True)
+        (scores_dir / "scores.json").write_text(json.dumps({
+            "weighted_average": 9.0,
+            "verdict": "pass",
+            "dimensions": {
+                "architecture": {"score": 9.0},
+                "tests": {"score": 9.0},
+                "lint": {"score": 9.0},
+                "intent": {"score": 9.0},
+            },
+        }))
+
+        args = _args(tmp_path)
+        args.output_dir = str(tmp_path / "out")
+
+        epic = _epic("E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert from_s == "ReviewPending"
+        assert to_s == "PRCreated"
+        assert created == ["E001"]
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("completed", "PRCreated"),
+        ("Completed", "PRCreated"),
+        ("COMPLETED", "PRCreated"),
+        ("prcreated", "PRCreated"),
+        ("Running", "Generating"),
+        ("done", "Done"),
+    ])
+    def test_case_variants_normalise_on_load(self, tmp_path, raw, expected):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+            status=raw, pr_url="https://github.com/org/repo/pull/7"))
+
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["status"] == expected
+        if raw != expected:
+            assert state["status_normalized_from"] == raw
+
+    @pytest.mark.parametrize("raw", ["exhausted", "Exhausted", "error"])
+    def test_exhausted_and_error_become_failed(self, tmp_path, raw):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        self._pipeline_state(status=raw))
+
+        epic = _epic("E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert state["status"] == "Failed"
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, _args(tmp_path), "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert "Terminal state: Failed" in detail
+
+    def test_normalisation_preserves_pipeline_fields(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+            pr_url="https://github.com/org/repo/pull/7", pr_state="open"))
+
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+
+        assert state["current_version"] == 2
+        assert state["max_iterations"] == 10
+        assert state["pr_state"] == "open"
+        assert state["pr_url"] == "https://github.com/org/repo/pull/7"
+        assert state["timestamps"] == {"created": "t0", "last_run": "t1"}
+        assert state["scores"] == {"weighted_average": 8.4}
+        assert state["strategy_key"] == "RHAISTRAT-1"
+
+    def test_unknown_state_fails_loudly(self, tmp_path, caplog):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        self._pipeline_state(status="banana"))
+
+        epic = _epic("E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+
+        with caplog.at_level("ERROR"):
+            action, from_s, to_s, detail = ci_process_epic(
+                epic, state, _args(tmp_path), "srv", "usr", "tok")
+
+        assert action == FAILED, "an unknown state must not be a silent skip"
+        assert "Unrecognised state" in detail
+        assert "banana" in detail
+        assert any("unrecognised run status" in r.message.lower()
+                   for r in caplog.records)
+
+    def test_unknown_state_file_is_left_intact(self, tmp_path):
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+                        self._pipeline_state(status="banana"))
+
+        epic = _epic("E001")
+        ci_process_epic(epic, load_epic_state(tmp_path, "RHAISTRAT-1", "E001"),
+                        _args(tmp_path), "srv", "usr", "tok")
+
+        raw = yaml.safe_load(
+            (tmp_path / "RHAISTRAT-1" / "E001" / "run-metadata.yaml")
+            .read_text())
+        assert raw["status"] == "banana"
+        assert raw["current_version"] == 2
+
+
+class TestArtifactCopyDoesNotClobberState:
+    """The skill's run-metadata must merge into the state file, never replace it."""
+
+    def _setup(self, tmp_path, produced):
+        import run_pipeline
+
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001", {
+            "status": "PRCreated",
+            "target_repo": "mlflow/mlflow",
+            "current_version": 2,
+            "max_iterations": 10,
+            "pr_url": "https://github.com/org/repo/pull/7",
+            "pr_state": "open",
+            "timestamps": {"created": "t0"},
+            "scores": {"weighted_average": 8.4},
+        })
+
+        run_dir = tmp_path / "artifacts" / "codegen-runs" / "E001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run-metadata.yaml").write_text(yaml.dump(produced))
+
+        run_pipeline._copy_codegen_artifacts_to_data_repo(
+            str(tmp_path / "data"), "RHAISTRAT-1", "E001",
+            str(tmp_path / "artifacts"))
+
+        return load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+
+    def test_pipeline_fields_survive_and_status_is_not_taken(self, tmp_path):
+        state = self._setup(tmp_path, {
+            "epic_id": "E001",
+            "status": "completed",
+            "versions": 3,
+            "final_score": 8.6,
+            "scores_by_dimension": {"architecture": 9, "tests": 8},
+            "started_at": "t-start",
+        })
+
+        assert state["status"] == "PRCreated"
+        assert state["current_version"] == 2
+        assert state["max_iterations"] == 10
+        assert state["pr_state"] == "open"
+        assert state["timestamps"] == {"created": "t0"}
+        assert state["scores"] == {"weighted_average": 8.4}
+
+        # ...and the skill's run facts are folded in under their own key
+        assert state["codegen_outcome"] == "completed"
+        assert state["versions"] == 3
+        assert state["final_score"] == 8.6
+        assert state["scores_by_dimension"] == {"architecture": 9, "tests": 8}
+        assert "status_normalized_from" not in state
+
+    def test_codegen_outcome_key_is_carried_through(self, tmp_path):
+        state = self._setup(tmp_path, {
+            "epic_id": "E001",
+            "codegen_outcome": "exhausted",
+            "versions": 5,
+        })
+
+        assert state["status"] == "PRCreated"
+        assert state["codegen_outcome"] == "exhausted"
+
+    def test_facts_land_in_live_state_dict(self, tmp_path):
+        """A later save_epic_state must not drop the merged facts."""
+        import run_pipeline
+
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001",
+                        {"status": "Generating", "current_version": 1})
+        run_dir = tmp_path / "artifacts" / "codegen-runs" / "E001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run-metadata.yaml").write_text(
+            yaml.dump({"status": "completed", "versions": 1,
+                       "language": "go"}))
+
+        state = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+        run_pipeline._copy_codegen_artifacts_to_data_repo(
+            str(tmp_path / "data"), "RHAISTRAT-1", "E001",
+            str(tmp_path / "artifacts"), state)
+
+        assert state["codegen_outcome"] == "completed"
+        assert state["language"] == "go"
+        assert state["status"] == "Generating"
+
+        state["status"] = "ReviewPending"
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001", state)
+
+        reloaded = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+        assert reloaded["codegen_outcome"] == "completed"
+        assert reloaded["language"] == "go"
+        assert reloaded["status"] == "ReviewPending"
+
+
+class TestRescueOfClobberedState:
+    """An epic already wedged in the field must converge, not idle forever.
+
+    The clobbering write left only the skill's fields: an outcome word in
+    `status`, `versions` instead of `current_version`, and no artifacts in a
+    fresh CI checkout — only the data repo's copies.
+    """
+
+    def _clobbered_state(self, tmp_path, **overrides):
+        state = {
+            "epic_id": "E001",
+            "target_repo": "https://github.com/mlflow/mlflow",
+            "branch": "epic/E001",
+            "language": "python",
+            "status": "completed",
+            "versions": 2,
+            "final_score": 8.6,
+            "started_at": "t0",
+        }
+        state.update(overrides)
+        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", state)
+        return load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+
+    def test_versions_restores_current_version(self, tmp_path):
+        state = self._clobbered_state(tmp_path)
+        assert state["status"] == "ReviewPending"
+        assert state["current_version"] == 2
+
+    def test_scores_are_read_from_data_repo(self, tmp_path, monkeypatch):
+        import run_pipeline
+
+        monkeypatch.setattr(run_pipeline, "_create_pr_for_epic",
+                            lambda ep, st, ar: "https://x/pull/3")
+        monkeypatch.setattr(run_pipeline, "transition_issue",
+                            lambda *a, **k: (True, "Review"))
+        monkeypatch.setattr(run_pipeline, "link_pr_to_jira",
+                            lambda *a, **k: None)
+
+        state = self._clobbered_state(tmp_path)
+
+        v2 = tmp_path / "RHAISTRAT-1" / "E001" / "v2"
+        v2.mkdir(parents=True)
+        (v2 / "scores.json").write_text(json.dumps({
+            "weighted_average": 8.6,
+            "verdict": "pass",
+            "dimensions": {
+                "architecture": {"score": 9.0},
+                "tests": {"score": 8.0},
+                "lint": {"score": 9.0},
+                "intent": {"score": 8.5},
+            },
+        }))
+
+        args = _args(tmp_path)
+        args.output_dir = str(tmp_path / "empty-artifacts")
+
+        action, from_s, to_s, detail = ci_process_epic(
+            _epic("E001"), state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert from_s == "ReviewPending"
+        assert to_s == "PRCreated"
+
+        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        assert saved["status"] == "PRCreated"
+        assert saved["pr_url"] == "https://x/pull/3"
+
+
+class TestUnknownStateExitCode:
+    """A loud failure must reach the process exit code, not just the log."""
+
+    def test_main_exits_nonzero_when_an_epic_fails(self, tmp_path,
+                                                   monkeypatch):
+        import run_pipeline
+
+        monkeypatch.setattr(run_pipeline, "require_env",
+                            lambda: ("srv", "usr", "tok"))
+        monkeypatch.setattr(
+            run_pipeline, "process_strategy_ci",
+            lambda key, s, u, t, args: ([], {
+                PROCESSED: [], SKIPPED: [], BLOCKED: [],
+                FAILED: [("E001", "Unrecognised state 'completed'")],
+            }, []))
+
+        rc = run_pipeline.main([
+            "RHAISTRAT-1", "--ci",
+            "--data-repo", str(tmp_path / "data"),
+            "--log-dir", str(tmp_path / "logs"),
+            "--output-dir", str(tmp_path / "artifacts"),
+        ])
+
+        assert rc == 1

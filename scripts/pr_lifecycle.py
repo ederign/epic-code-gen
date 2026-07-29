@@ -355,7 +355,8 @@ def derive_pr_state(status):
     """Map PR status to pipeline epic state.
 
     Returns:
-        str: one of "PRCreated", "PRChangesRequested", "Done", "Ready"
+        str: a CI state (artifact_utils.CI_STATES) — one of "PRCreated",
+        "PRChangesRequested", "Done", "Ready"
     """
     if status["merged"]:
         return "Done"

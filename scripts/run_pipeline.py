@@ -37,7 +37,15 @@ from datetime import datetime, timezone
 log = logging.getLogger("pipeline")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import find_epic_task, read_frontmatter_validated
+from artifact_utils import (
+    CI_STATES,
+    PIPELINE_OWNED_KEYS,
+    find_epic_task,
+    merge_run_metadata,
+    normalize_ci_status,
+    read_codegen_outcome,
+    read_frontmatter_validated,
+)
 from fetch_epic import fetch_strategy
 from fetch_jira_epics import (
     DONE_STATUSES,
@@ -70,10 +78,8 @@ FAILED = "failed"
 PROCESSABLE_STATUSES = {"New", "To Do", "Open"}
 AUTOMATIONBOT_ACCOUNT_ID = "712020:9efc6a2a-8d76-4879-b330-502b84a3e040"
 
-CI_STATES = {
-    "Pending", "Ready", "Generating", "ReviewPending",
-    "PRCreated", "PRChangesRequested", "Done", "Blocked", "Failed",
-}
+# CI_STATES is defined once, in artifact_utils, alongside the codegen skill's
+# outcome vocabulary and the mapping between them.
 CI_TERMINAL_STATES = {"Done", "Failed"}
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -518,16 +524,33 @@ def _run_cmd(cmd, cwd=None, label=None, timeout=600):
         return False
 
 
-def _read_run_status(run_meta_path):
-    """Read status field from run-metadata.yaml without a YAML library."""
+def _read_run_outcome(run_meta_path):
+    """Read the codegen skill's outcome from run-metadata.yaml.
+
+    The skill records its end-of-run result in `codegen_outcome`; runs written
+    before that field existed put it in `status`, which now belongs to the CI
+    state machine. read_codegen_outcome resolves both.
+
+    Returns:
+        str or None: one of artifact_utils.CODEGEN_OUTCOMES, or None.
+    """
     try:
         with open(run_meta_path) as f:
-            for line in f:
-                if line.startswith("status:"):
-                    return line.split(":", 1)[1].strip()
+            data = _parse_flat_yaml(f)
     except OSError:
-        pass
-    return None
+        return None
+    return read_codegen_outcome(data)
+
+
+def _parse_flat_yaml(lines):
+    """Parse `key: value` lines into a dict, ignoring nested blocks."""
+    data = {}
+    for line in lines:
+        if line.startswith((" ", "\t", "#")) or ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        data[key.strip()] = val.strip().strip("'\"")
+    return data
 
 
 def invoke_codegen(epic_id, args):
@@ -704,8 +727,7 @@ def process_strategy(strategy_key, server, user, token, args):
 
         run_meta = os.path.join(
             args.output_dir, "codegen-runs", epic_id, "run-metadata.yaml")
-        existing_status = _read_run_status(run_meta)
-        if existing_status == "completed":
+        if _read_run_outcome(run_meta) == "completed":
             print(f"  {epic_id}: REUSING existing completed run")
             results[PROCESSED].append((epic_id, "reused completed run"))
             epic_transitions = []
@@ -886,6 +908,9 @@ def print_summary(all_results):
 def load_epic_state(data_repo, strategy_key, epic_id):
     """Read epic state from data repo's run-metadata.yaml.
 
+    Foreign `status` values are normalised to CI states on read, so an epic
+    whose state file was written by another producer still runs.
+
     Returns:
         dict or None: parsed metadata, or None if no state file exists.
     """
@@ -895,8 +920,45 @@ def load_epic_state(data_repo, strategy_key, epic_id):
         return None
     if yaml:
         with open(meta_path) as f:
-            return yaml.safe_load(f) or {}
-    return _read_metadata_simple(meta_path)
+            state = yaml.safe_load(f) or {}
+    else:
+        state = _read_metadata_simple(meta_path)
+    return normalize_epic_state(state)
+
+
+def normalize_epic_state(state):
+    """Map a foreign `status` onto a canonical CI state, in place.
+
+    run-metadata.yaml has been written with three different status
+    vocabularies, and a value the state machine does not recognise used to
+    skip the epic on every run forever — a silent deadlock that also blocked
+    everything downstream (RHAIFIRST-374). Translating on read both fixes new
+    runs and rescues epics already stuck in the field.
+
+    Values that cannot be mapped are left untouched: ci_process_epic fails
+    loudly on them rather than guessing.
+
+    Returns:
+        dict: the same state dict, for chaining.
+    """
+    if not state:
+        return state
+
+    raw = state.get("status")
+    if not raw or raw in CI_STATES:
+        return state
+
+    mapped = normalize_ci_status(raw, has_pr_url=bool(state.get("pr_url")))
+    if mapped:
+        log.warning("%s: foreign run status %r normalised to %r",
+                    state.get("epic_id", "?"), raw, mapped)
+        state["status"] = mapped
+        state["status_normalized_from"] = raw
+        # A foreign write also dropped the pipeline's iteration counter; the
+        # skill's version count is the same number under another name.
+        if "current_version" not in state and state.get("versions"):
+            state["current_version"] = state["versions"]
+    return state
 
 
 def _read_metadata_simple(path):
@@ -941,8 +1003,12 @@ def save_epic_state(data_repo, strategy_key, epic_id, state):
 
 
 def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
-                                         output_dir):
-    """Copy all artifacts (tasks, strategy, specs, diffs, reviews) to the data repo."""
+                                         output_dir, state=None):
+    """Copy all artifacts (tasks, strategy, specs, diffs, reviews) to the data repo.
+
+    `state`, when given, is the live epic state; the skill's run facts are
+    folded into it rather than left only in the file.
+    """
     dest = os.path.join(data_repo, strategy_key, epic_id)
     os.makedirs(dest, exist_ok=True)
 
@@ -968,12 +1034,56 @@ def _copy_codegen_artifacts_to_data_repo(data_repo, strategy_key, epic_id,
         entry_dest = os.path.join(dest, entry)
         if entry.startswith("run-attempt"):
             continue
-        if os.path.isfile(entry_src):
+        if entry == "run-metadata.yaml":
+            # Never copy over the state file: it is the CI state machine's
+            # store, and the skill's copy carries none of the pipeline's
+            # fields. Merge the skill's run facts in instead.
+            _merge_run_metadata_into_state(entry_src, entry_dest, state)
+        elif os.path.isfile(entry_src):
             shutil.copy2(entry_src, entry_dest)
         elif os.path.isdir(entry_src):
             if os.path.isdir(entry_dest):
                 shutil.rmtree(entry_dest)
             shutil.copytree(entry_src, entry_dest)
+
+
+def _merge_run_metadata_into_state(src_path, dest_path, state=None):
+    """Fold the skill's run-metadata into the data repo's state file.
+
+    The skill writes run facts (outcome, versions, per-dimension scores) to
+    `artifacts/`; the data repo copy of the same filename is the CI state
+    machine's store. Copying one over the other drops the pipeline's fields —
+    `status` above all — and deadlocks the epic (RHAIFIRST-374). So merge, and
+    never take `status` from the skill's file: a legacy `status: completed`
+    there becomes `codegen_outcome: completed` here.
+
+    When the caller holds the live state dict, the same facts are folded into
+    it so the next save_epic_state doesn't write them back out again.
+    """
+    if not os.path.isfile(src_path):
+        return
+    if yaml:
+        with open(src_path, encoding="utf-8") as f:
+            produced = yaml.safe_load(f)
+    else:
+        produced = _read_metadata_simple(src_path)
+    if not isinstance(produced, dict):
+        return
+
+    updates = {k: v for k, v in produced.items()
+               if k not in PIPELINE_OWNED_KEYS}
+    outcome = read_codegen_outcome(produced)
+    if outcome:
+        updates["codegen_outcome"] = outcome
+
+    try:
+        merge_run_metadata(dest_path, updates)
+    except ValueError as e:
+        log.error("Refusing to merge %s into %s: %s", src_path, dest_path, e)
+        return
+
+    if state is not None:
+        state.update(updates)
 
 
 def ci_process_epic(epic, state, args, server, user, token):
@@ -994,6 +1104,9 @@ def ci_process_epic(epic, state, args, server, user, token):
         state = _init_epic_state(epic)
         save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
+    # Idempotent: load_epic_state already normalised, but callers may hand us
+    # a state dict read some other way.
+    normalize_epic_state(state)
     current = state.get("status", "Pending")
 
     if current in CI_TERMINAL_STATES:
@@ -1014,8 +1127,21 @@ def ci_process_epic(epic, state, args, server, user, token):
         return _ci_handle_pr_changes(epic, state, args, server, user, token)
     elif current == "Blocked":
         return _ci_handle_blocked(epic, state, args, server, user, token)
-    else:
-        return SKIPPED, current, current, f"Unknown state: {current}"
+
+    # Unrecognised, and normalize_epic_state could not map it. This used to be
+    # a silent SKIPPED that still exited 0, so the epic was skipped on every
+    # run forever and its dependents stayed Blocked while CI reported success.
+    # Report it as FAILED: main() exits 1 and the epic lands in the summary's
+    # failed column. The state file is deliberately left as-is — we do not
+    # understand this document, and overwriting it would destroy the evidence
+    # a human needs, so the run keeps failing until someone fixes it.
+    log.error("%s: unrecognised run status %r in %s — expected one of: %s",
+              epic_id, current,
+              os.path.join(args.data_repo, epic["strategy_key"], epic_id,
+                           "run-metadata.yaml"),
+              ", ".join(sorted(CI_STATES)))
+    return FAILED, current, current, \
+        f"Unrecognised state '{current}' — not a CI state and not mappable"
 
 
 def _init_epic_state(epic):
@@ -1120,7 +1246,7 @@ def _ci_handle_ready(epic, state, args, server, user, token):
         state["current_version"] = actual_version
 
     _copy_codegen_artifacts_to_data_repo(
-        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir, state)
     if success:
         state["status"] = "ReviewPending"
         save_epic_state(
@@ -1150,6 +1276,12 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
     scores_path = os.path.join(
         args.output_dir, "codegen-runs", epic_id,
         f"v{version}", "scores.json")
+    if not os.path.isfile(scores_path):
+        # An epic whose state was rescued in a later run has no artifacts in
+        # this checkout, but the data repo keeps every scored version.
+        scores_path = os.path.join(
+            args.data_repo, epic["strategy_key"], epic_id,
+            f"v{version}", "scores.json")
 
     if not os.path.isfile(scores_path):
         return SKIPPED, "ReviewPending", "ReviewPending", \
@@ -1159,7 +1291,7 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
         scores = json.load(f)
 
     _copy_codegen_artifacts_to_data_repo(
-        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir, state)
 
     state["scores"] = scores
     avg = scores.get("weighted_average", 0)
@@ -1384,7 +1516,7 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         response = {"success": False, "errors": [str(e)]}
 
     _copy_codegen_artifacts_to_data_repo(
-        args.data_repo, epic["strategy_key"], epic_id, args.output_dir)
+        args.data_repo, epic["strategy_key"], epic_id, args.output_dir, state)
 
     if response.get("success"):
         rebase = response.get("rebase") or {}

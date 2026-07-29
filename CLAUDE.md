@@ -46,7 +46,26 @@ python3 scripts/frontmatter.py set <path> field=value field=value ...
 
 # Read validated frontmatter as JSON
 python3 scripts/frontmatter.py read <path>
+
+# Merge fields into a run-metadata.yaml (never replaces the file)
+python3 scripts/frontmatter.py merge-run-metadata <path> field=value ...
 ```
+
+### run-metadata.yaml ownership
+
+`run-metadata.yaml` has two writers, so it has two status fields with one
+owner each — defined once, in `scripts/artifact_utils.py`:
+
+| Field | Owner | Vocabulary |
+|-------|-------|------------|
+| `status` | `run_pipeline.py` CI state machine | `CI_STATES` — Pending, Ready, Generating, ReviewPending, PRCreated, PRChangesRequested, Done, Blocked, Failed |
+| `codegen_outcome` | `/epic-codegen` skill | `CODEGEN_OUTCOMES` — completed, exhausted, failed, error |
+
+Never write this file whole — always merge (`merge_run_metadata`, or the
+`merge-run-metadata` CLI above, which rejects `status=`). A whole-file write by
+either producer deletes the other's fields, which deadlocked epics silently
+until RHAIFIRST-374. `normalize_ci_status` maps legacy/foreign values onto CI
+states on read; an unmappable one is a hard failure, never a skip.
 
 ### State Persistence
 
@@ -211,7 +230,8 @@ python3 scripts/run_index.py artifacts/codegen-runs/ --json
 ```
 
 Scans `*/run-metadata.yaml`, writes `artifacts/codegen-runs/index.json` with
-all runs, total count, and summary by status (completed/exhausted/error).
+all runs, total count, and summary by `codegen_outcome`
+(completed/exhausted/error).
 Called automatically at the end of every `/epic-codegen` run.
 
 ## PR Rebase

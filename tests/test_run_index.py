@@ -174,6 +174,27 @@ class TestBuildIndex:
         assert index["summary"]["exhausted"] == 1
         assert index["summary"]["error"] == 1
 
+    def test_summary_keys_off_codegen_outcome(self, tmp_path):
+        """The skill writes `codegen_outcome`; `status` is the pipeline's."""
+        run_dir = tmp_path / "RHAISTRAT-1749-E003"
+        run_dir.mkdir()
+        (run_dir / "run-metadata.yaml").write_text(
+            "epic_id: RHAISTRAT-1749-E003\n"
+            "codegen_outcome: completed\n"
+            "status: PRCreated\n"
+            "versions: 2\n")
+
+        index = build_index(str(tmp_path))
+        assert index["summary"] == {"completed": 1}
+
+    def test_summary_falls_back_to_legacy_status(self, tmp_path):
+        run_dir = tmp_path / "RHAISTRAT-1749-E001"
+        run_dir.mkdir()
+        (run_dir / "run-metadata.yaml").write_text(SAMPLE_METADATA)
+
+        index = build_index(str(tmp_path))
+        assert index["summary"] == {"completed": 1}
+
     def test_skips_dirs_without_metadata(self, tmp_path):
         (tmp_path / "some-dir").mkdir()
         run_dir = tmp_path / "RHAISTRAT-1749-E001"

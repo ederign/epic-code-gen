@@ -800,7 +800,9 @@ def _render_epic_detail(epic_id, artifacts, pr_url=None):
     if not pr_url:
         pr_url = meta.get("pr_url")
     scores = artifacts.get("scores")
-    status = meta.get("status", "unknown")
+    # The skill records its result in `codegen_outcome`; older runs put it in
+    # `status`, which now belongs to the pipeline state machine.
+    status = meta.get("codegen_outcome") or meta.get("status") or "unknown"
     final_score = meta.get("final_score", "—")
     lang = meta.get("language", "—")
     versions = meta.get("versions", "—")

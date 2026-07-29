@@ -13,6 +13,101 @@ import sys
 import yaml
 
 
+# ─── Run Status Vocabulary ─────────────────────────────────────────────────────
+
+# run-metadata.yaml has two producers, and this is the single definition of
+# both vocabularies. It used to carry three overlapping enums for one `status`
+# key — the CI state machine's, the codegen skill's lowercase end-of-run words,
+# and this module's capitalised ones — so whichever producer wrote last wedged
+# the pipeline (RHAIFIRST-374).
+#
+#   status          — owned by run_pipeline's CI state machine. CI_STATES.
+#   codegen_outcome — owned by the epic-codegen skill. CODEGEN_OUTCOMES.
+#
+# The skill never writes `status`; the pipeline never writes `codegen_outcome`.
+# Add a state here and nowhere else.
+
+CI_STATES = (
+    "Pending", "Ready", "Generating", "ReviewPending",
+    "PRCreated", "PRChangesRequested", "Done", "Blocked", "Failed",
+)
+
+CODEGEN_OUTCOMES = ("completed", "exhausted", "failed", "error")
+
+# Fields in run-metadata.yaml that belong to the pipeline's state machine. No
+# other producer may set them, and a producer's own metadata must never
+# overwrite them when the two documents are merged.
+PIPELINE_OWNED_KEYS = (
+    "status", "status_normalized_from", "current_version", "max_iterations",
+    "pr_state", "timestamps", "scores", "blocked_by", "failure_reason",
+    "tooling_missing",
+)
+
+_CI_STATES_BY_LOWER = {state.lower(): state for state in CI_STATES}
+
+# Foreign `status` values found in the field, mapped onto the CI state the
+# pipeline should resume from. Anything not listed here and not in CI_STATES is
+# unmappable, and callers must fail loudly rather than guess — a silent skip on
+# an unknown state is what deadlocked RHAISTRAT-2162.
+_FOREIGN_CI_STATES = {
+    # An exhausted run burned every iteration without a passing verdict and
+    # pushes no code, which is exactly what _ci_handle_review_pending records
+    # as Failed on its own. Terminal: re-running it repeats the same failure.
+    "exhausted": "Failed",
+    # An errored run has no scored version to act on and needs a human, so
+    # treat it like any other failed run rather than silently retrying.
+    "error": "Failed",
+    # This module's old capitalised "Running" meant codegen in flight.
+    "running": "Generating",
+}
+
+
+def normalize_ci_status(status, has_pr_url=False):
+    """Map a status value onto a canonical CI state.
+
+    Accepts canonical states in any case, the codegen skill's lowercase
+    end-of-run words, and this module's older capitalised values.
+
+    `completed` resolves against the run's PR: a finished run with a PR is one
+    the pipeline must keep polling (PRCreated), and one without a PR still owes
+    scoring and PR creation (ReviewPending).
+
+    Returns:
+        str or None: canonical CI state, or None if unmappable.
+    """
+    if not isinstance(status, str):
+        return None
+
+    key = status.strip().lower()
+    if not key:
+        return None
+    if key in _CI_STATES_BY_LOWER:
+        return _CI_STATES_BY_LOWER[key]
+    if key == "completed":
+        return "PRCreated" if has_pr_url else "ReviewPending"
+    return _FOREIGN_CI_STATES.get(key)
+
+
+def read_codegen_outcome(metadata):
+    """Return the codegen skill's end-of-run outcome from a metadata mapping.
+
+    Runs written before `status` and `codegen_outcome` were split recorded the
+    outcome in `status`; accept that key only when it holds an outcome word,
+    never when it holds a CI state.
+
+    Returns:
+        str or None: one of CODEGEN_OUTCOMES, or None if absent.
+    """
+    data = metadata or {}
+    outcome = data.get("codegen_outcome")
+    if outcome in CODEGEN_OUTCOMES:
+        return outcome
+    legacy = data.get("status")
+    if legacy in CODEGEN_OUTCOMES:
+        return legacy
+    return None
+
+
 # ─── Schema Definitions ────────────────────────────────────────────────────────
 
 # Each schema is a dict of field_name -> field_spec.
@@ -105,10 +200,20 @@ SCHEMAS = {
             "required": True,
             "pattern": r"^[A-Z][A-Z0-9]+-\d+(-E\d+)?$",
         },
+        # Owned by the pipeline state machine, not by the codegen skill —
+        # optional here because the skill's own write must leave it alone.
         "status": {
             "type": "string",
-            "required": True,
-            "enum": ["Running", "Completed", "Failed", "Exhausted"],
+            "required": False,
+            "enum": list(CI_STATES),
+            "default": None,
+        },
+        # The codegen skill's end-of-run result. This is what the skill writes.
+        "codegen_outcome": {
+            "type": "string",
+            "required": False,
+            "enum": list(CODEGEN_OUTCOMES),
+            "default": None,
         },
         "iterations": {
             "type": "int",
@@ -447,6 +552,69 @@ def update_frontmatter(path, updates, schema_type):
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+# ─── Run Metadata (run-metadata.yaml) ──────────────────────────────────────────
+
+def _deep_update(target, updates):
+    """Recursively merge `updates` into `target` in place."""
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+
+def merge_run_metadata(path, updates):
+    """Merge updates into a run-metadata.yaml, preserving every other key.
+
+    Two producers write this file: the codegen skill (run facts — outcome,
+    versions, per-dimension scores) and the pipeline's CI state machine
+    (`status`, `current_version`, `max_iterations`, `pr_state`, `timestamps`,
+    `scores`). A whole-file rewrite by either producer silently deletes the
+    other's fields, which is how RHAIFIRST-374 deadlocked epics. Every write
+    goes through here so nothing is dropped. Nested mappings merge key by key.
+
+    Args:
+        path: run-metadata.yaml path (created, with parents, if absent)
+        updates: mapping of fields to set
+
+    Returns:
+        dict: the merged document as written.
+
+    Raises:
+        ValueError: if updates contain `status`, or a `codegen_outcome` value
+            outside CODEGEN_OUTCOMES.
+    """
+    if "status" in updates:
+        raise ValueError(
+            "`status` is owned by the pipeline state machine (one of: "
+            f"{', '.join(CI_STATES)}) and must not be written here. "
+            "Record the codegen result in `codegen_outcome` instead (one of: "
+            f"{', '.join(CODEGEN_OUTCOMES)}).")
+
+    outcome = updates.get("codegen_outcome")
+    if outcome is not None and outcome not in CODEGEN_OUTCOMES:
+        raise ValueError(
+            f"Unknown codegen_outcome '{outcome}'. Valid values: "
+            f"{', '.join(CODEGEN_OUTCOMES)}")
+
+    merged = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            existing = yaml.safe_load(f)
+        if isinstance(existing, dict):
+            merged = existing
+
+    _deep_update(merged, updates)
+
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(merged, f, default_flow_style=False, sort_keys=False,
+                  allow_unicode=True)
+    return merged
 
 
 # ─── Artifact File Discovery ───────────────────────────────────────────────────
