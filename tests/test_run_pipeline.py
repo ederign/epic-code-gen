@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from fetch_jira_epics import SKIP_LABEL
 from run_pipeline import (
     AUTOMATIONBOT_ACCOUNT_ID,
     BLOCKED,
@@ -40,7 +41,7 @@ from run_pipeline import (
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _epic(epic_id, jira_status="New", dependencies=None, blocks=None,
-          title=None):
+          title=None, jira_labels=None):
     """Build a minimal epic data dict."""
     return {
         "epic_id": epic_id,
@@ -51,6 +52,7 @@ def _epic(epic_id, jira_status="New", dependencies=None, blocks=None,
         "status": "Pending",
         "jira_status": jira_status,
         "components": None,
+        "jira_labels": jira_labels,
         "dependencies": dependencies,
         "blocks": blocks,
         "body": "",
@@ -83,39 +85,39 @@ class TestFindEligible:
 
     def test_no_deps_all_eligible(self):
         epics = {
-            "A-1": _epic("A-1"),
-            "A-2": _epic("A-2"),
-            "A-3": _epic("A-3"),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2"),
+            "RHAI-3": _epic("RHAI-3"),
         }
         result = find_eligible(epics, completed_keys=set(), handled_keys=set())
-        assert result == ["A-1", "A-2", "A-3"]
+        assert result == ["RHAI-1", "RHAI-2", "RHAI-3"]
 
     def test_dep_chain_first_only(self):
         epics = {
-            "A-1": _epic("A-1"),
-            "A-2": _epic("A-2", dependencies=["A-1"]),
-            "A-3": _epic("A-3", dependencies=["A-2"]),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2", dependencies=["RHAI-1"]),
+            "RHAI-3": _epic("RHAI-3", dependencies=["RHAI-2"]),
         }
         result = find_eligible(epics, completed_keys=set(), handled_keys=set())
-        assert result == ["A-1"]
+        assert result == ["RHAI-1"]
 
     def test_completed_dep_unblocks(self):
         epics = {
-            "A-1": _epic("A-1"),
-            "A-2": _epic("A-2", dependencies=["A-1"]),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2", dependencies=["RHAI-1"]),
         }
         result = find_eligible(
-            epics, completed_keys={"A-1"}, handled_keys={"A-1"})
-        assert result == ["A-2"]
+            epics, completed_keys={"RHAI-1"}, handled_keys={"RHAI-1"})
+        assert result == ["RHAI-2"]
 
     def test_already_handled_excluded(self):
         epics = {
-            "A-1": _epic("A-1"),
-            "A-2": _epic("A-2"),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2"),
         }
         result = find_eligible(
-            epics, completed_keys=set(), handled_keys={"A-1"})
-        assert result == ["A-2"]
+            epics, completed_keys=set(), handled_keys={"RHAI-1"})
+        assert result == ["RHAI-2"]
 
     def test_empty_epics(self):
         result = find_eligible({}, completed_keys=set(), handled_keys=set())
@@ -123,23 +125,23 @@ class TestFindEligible:
 
     def test_multiple_deps_all_must_be_completed(self):
         epics = {
-            "A-1": _epic("A-1"),
-            "A-2": _epic("A-2"),
-            "A-3": _epic("A-3", dependencies=["A-1", "A-2"]),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2"),
+            "RHAI-3": _epic("RHAI-3", dependencies=["RHAI-1", "RHAI-2"]),
         }
         result = find_eligible(
-            epics, completed_keys={"A-1"}, handled_keys={"A-1"})
-        assert "A-3" not in result
-        assert "A-2" in result
+            epics, completed_keys={"RHAI-1"}, handled_keys={"RHAI-1"})
+        assert "RHAI-3" not in result
+        assert "RHAI-2" in result
 
     def test_returns_sorted(self):
         epics = {
-            "C-1": _epic("C-1"),
-            "A-1": _epic("A-1"),
-            "B-1": _epic("B-1"),
+            "RHAI-3": _epic("RHAI-3"),
+            "RHAI-1": _epic("RHAI-1"),
+            "RHAI-2": _epic("RHAI-2"),
         }
         result = find_eligible(epics, completed_keys=set(), handled_keys=set())
-        assert result == ["A-1", "B-1", "C-1"]
+        assert result == ["RHAI-1", "RHAI-2", "RHAI-3"]
 
 
 # ─── TestProcessStrategy ─────────────────────────────────────────────────────
@@ -156,26 +158,26 @@ class TestProcessStrategy:
     def test_linear_chain_processes_first_only(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """A→B chain: only A is eligible (B blocked by A)."""
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": ["A-2"]},
-            "A-2": {"dependencies": ["A-1"], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": ["RHAI-2"]},
+            "RHAI-2": {"dependencies": ["RHAI-1"], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", blocks=["A-2"]),
-            _epic("A-2", dependencies=["A-1"]),
+            _epic("RHAI-1", blocks=["RHAI-2"]),
+            _epic("RHAI-2", dependencies=["RHAI-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[PROCESSED]) == 1
-        assert results[PROCESSED][0][0] == "A-1"
+        assert results[PROCESSED][0][0] == "RHAI-1"
         assert len(results[BLOCKED]) == 1
-        assert results[BLOCKED][0][0] == "A-2"
-        mock_invoke.assert_called_once_with("A-1", args)
+        assert results[BLOCKED][0][0] == "RHAI-2"
+        mock_invoke.assert_called_once_with("RHAI-1", args)
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -187,15 +189,15 @@ class TestProcessStrategy:
     def test_no_deps_all_eligible(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """Two independent epics: both eligible."""
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": []},
-            "A-2": {"dependencies": [], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": []},
+            "RHAI-2": {"dependencies": [], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1"), _epic("A-2"),
+            _epic("RHAI-1"), _epic("RHAI-2"),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             epics, results, *_ = process_strategy(
@@ -214,25 +216,25 @@ class TestProcessStrategy:
     def test_failure_blocks_dependents(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         """A fails → B stays blocked."""
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": ["A-2"]},
-            "A-2": {"dependencies": ["A-1"], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": ["RHAI-2"]},
+            "RHAI-2": {"dependencies": ["RHAI-1"], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", blocks=["A-2"]),
-            _epic("A-2", dependencies=["A-1"]),
+            _epic("RHAI-1", blocks=["RHAI-2"]),
+            _epic("RHAI-2", dependencies=["RHAI-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[FAILED]) == 1
-        assert results[FAILED][0][0] == "A-1"
+        assert results[FAILED][0][0] == "RHAI-1"
         assert len(results[BLOCKED]) == 1
-        assert results[BLOCKED][0][0] == "A-2"
+        assert results[BLOCKED][0][0] == "RHAI-2"
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -241,16 +243,16 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_all_done_in_jira(self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
         """All epics already Done → all skipped."""
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": []},
-            "A-2": {"dependencies": [], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": []},
+            "RHAI-2": {"dependencies": [], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="Done"),
-            _epic("A-2", jira_status="Closed"),
+            _epic("RHAI-1", jira_status="Done"),
+            _epic("RHAI-2", jira_status="Closed"),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             epics, results, *_ = process_strategy(
@@ -265,12 +267,12 @@ class TestProcessStrategy:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_dry_run_skips_invocation(self, mock_gen, mock_dag, mock_fetch):
         """Dry run: epics marked processed but no subprocess call."""
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
             epics, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
@@ -302,17 +304,17 @@ class TestProcessStrategy:
         issues = [{"key": f"A-{i}", "fields": {}} for i in range(1, 5)]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": []},
-            "A-2": {"dependencies": [], "blocks": []},
-            "A-3": {"dependencies": [], "blocks": ["A-4"]},
-            "A-4": {"dependencies": ["A-3"], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": []},
+            "RHAI-2": {"dependencies": [], "blocks": []},
+            "RHAI-3": {"dependencies": [], "blocks": ["RHAI-4"]},
+            "RHAI-4": {"dependencies": ["RHAI-3"], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="Done"),
-            _epic("A-2"),
-            _epic("A-3", blocks=["A-4"]),
-            _epic("A-4", dependencies=["A-3"]),
+            _epic("RHAI-1", jira_status="Done"),
+            _epic("RHAI-2"),
+            _epic("RHAI-3", blocks=["RHAI-4"]),
+            _epic("RHAI-4", dependencies=["RHAI-3"]),
         ]):
             mock_invoke.side_effect = [True, False]
             args = _make_args(output_dir="/tmp/test-artifacts")
@@ -367,12 +369,12 @@ class TestInvokeCodegen:
     @mock.patch("run_pipeline.subprocess.run")
     def test_passes_max_iterations(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        meta = tmp_path / "codegen-runs" / "A-1"
+        meta = tmp_path / "codegen-runs" / "RHAI-1"
         meta.mkdir(parents=True)
         (meta / "v1").mkdir()
         (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(max_iterations=5, output_dir=str(tmp_path))
-        invoke_codegen("A-1", args)
+        invoke_codegen("RHAI-1", args)
 
         cmd = mock_run.call_args[0][0]
         skill_arg = cmd[2]  # -p argument
@@ -381,13 +383,13 @@ class TestInvokeCodegen:
     @mock.patch("run_pipeline.subprocess.run")
     def test_passes_fork_owner(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
-        meta = tmp_path / "codegen-runs" / "A-1"
+        meta = tmp_path / "codegen-runs" / "RHAI-1"
         meta.mkdir(parents=True)
         (meta / "v1").mkdir()
         (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
         args = _make_args(fork_owner="dora-the-ai-coder",
                           output_dir=str(tmp_path))
-        invoke_codegen("A-1", args)
+        invoke_codegen("RHAI-1", args)
 
         cmd = mock_run.call_args[0][0]
         skill_arg = cmd[2]  # -p argument
@@ -397,28 +399,28 @@ class TestInvokeCodegen:
     def test_exit_zero_no_artifacts_returns_false(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(returncode=0)
         args = _make_args(output_dir=str(tmp_path))
-        result = invoke_codegen("A-1", args)
+        result = invoke_codegen("RHAI-1", args)
         assert result is False
 
     @mock.patch("run_pipeline.subprocess.run")
     def test_nonzero_exit_returns_false(self, mock_run):
         mock_run.return_value = mock.MagicMock(returncode=1)
         args = _make_args()
-        result = invoke_codegen("A-1", args)
+        result = invoke_codegen("RHAI-1", args)
         assert result is False
 
     @mock.patch("run_pipeline.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10))
     def test_timeout_returns_false(self, mock_run):
         args = _make_args(timeout=10)
-        result = invoke_codegen("A-1", args)
+        result = invoke_codegen("RHAI-1", args)
         assert result is False
 
     @mock.patch("run_pipeline.subprocess.run",
                 side_effect=FileNotFoundError("claude"))
     def test_command_not_found_returns_false(self, mock_run):
         args = _make_args()
-        result = invoke_codegen("A-1", args)
+        result = invoke_codegen("RHAI-1", args)
         assert result is False
 
 
@@ -433,20 +435,20 @@ class TestSetupTargetRepo:
             stdout='{"language": "typescript", "commands": {}}',
             stderr="",
         )
-        epic = _epic("A-1")
+        epic = _epic("RHAI-1")
         epic["target_repo"] = "https://github.com/org/repo.git"
         args = _make_args(output_dir=str(tmp_path))
         result = setup_target_repo(epic, args)
 
         assert result is True
-        pre_setup = tmp_path / "codegen-runs" / "A-1" / "pre-setup.json"
+        pre_setup = tmp_path / "codegen-runs" / "RHAI-1" / "pre-setup.json"
         assert pre_setup.exists()
         data = json.loads(pre_setup.read_text())
         assert data["language"] == "typescript"
         assert data["deps_installed"] is True
 
     def test_no_target_repo_returns_false(self):
-        epic = _epic("A-1")
+        epic = _epic("RHAI-1")
         epic["target_repo"] = ""
         args = _make_args()
         result = setup_target_repo(epic, args)
@@ -456,7 +458,7 @@ class TestSetupTargetRepo:
     def test_clone_failure_returns_false(self, mock_run):
         mock_run.return_value = mock.MagicMock(
             returncode=128, stdout="", stderr="clone failed")
-        epic = _epic("A-1")
+        epic = _epic("RHAI-1")
         epic["target_repo"] = "https://github.com/org/repo.git"
         args = _make_args()
         result = setup_target_repo(epic, args)
@@ -466,7 +468,7 @@ class TestSetupTargetRepo:
     def test_passes_fork_owner(self, mock_run, tmp_path):
         mock_run.return_value = mock.MagicMock(
             returncode=0, stdout="{}", stderr="")
-        epic = _epic("A-1")
+        epic = _epic("RHAI-1")
         epic["target_repo"] = "https://github.com/org/repo.git"
         args = _make_args(fork_owner="dora-the-ai-coder",
                           output_dir=str(tmp_path))
@@ -526,30 +528,30 @@ class TestBuildRunLog:
 
     def test_captures_all_epics_with_actions(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1"), _epic("A-2", dependencies=["A-1"])]
+        epics = [_epic("RHAI-1"), _epic("RHAI-2", dependencies=["RHAI-1"])]
         results = {
-            PROCESSED: [("A-1", "codegen completed")],
+            PROCESSED: [("RHAI-1", "codegen completed")],
             SKIPPED: [],
-            BLOCKED: [("A-2", "Blocked by A-1")],
+            BLOCKED: [("RHAI-2", "Blocked by A-1")],
             FAILED: [],
         }
-        transitions_log = {"A-1": [{"to": "In Progress", "success": True}]}
+        transitions_log = {"RHAI-1": [{"to": "In Progress", "success": True}]}
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log({"RHAISTRAT-1": (epics, results, transitions_log, {})}, start)
 
         strat = log["strategies"]["RHAISTRAT-1"]
-        assert "A-1" in strat["epics"]
-        assert "A-2" in strat["epics"]
-        assert strat["epics"]["A-1"]["action"] == PROCESSED
-        assert strat["epics"]["A-1"]["result"] == "success"
-        assert strat["epics"]["A-2"]["action"] == BLOCKED
+        assert "RHAI-1" in strat["epics"]
+        assert "RHAI-2" in strat["epics"]
+        assert strat["epics"]["RHAI-1"]["action"] == PROCESSED
+        assert strat["epics"]["RHAI-1"]["result"] == "success"
+        assert strat["epics"]["RHAI-2"]["action"] == BLOCKED
 
     def test_includes_strategy_summary_counts(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1"), _epic("A-2", jira_status="Done")]
+        epics = [_epic("RHAI-1"), _epic("RHAI-2", jira_status="Done")]
         results = {
-            PROCESSED: [("A-1", "codegen completed")],
-            SKIPPED: [("A-2", "Already done")],
+            PROCESSED: [("RHAI-1", "codegen completed")],
+            SKIPPED: [("RHAI-2", "Already done")],
             BLOCKED: [],
             FAILED: [],
         }
@@ -564,15 +566,15 @@ class TestBuildRunLog:
 
     def test_multiple_strategies(self):
         from datetime import datetime, timezone
-        epics_a = [_epic("A-1")]
+        epics_a = [_epic("RHAI-1")]
         results_a = {
-            PROCESSED: [("A-1", "done")], SKIPPED: [],
+            PROCESSED: [("RHAI-1", "done")], SKIPPED: [],
             BLOCKED: [], FAILED: [],
         }
-        epics_b = [_epic("B-1")]
+        epics_b = [_epic("RHAI-4")]
         results_b = {
             PROCESSED: [], SKIPPED: [],
-            BLOCKED: [], FAILED: [("B-1", "failed")],
+            BLOCKED: [], FAILED: [("RHAI-4", "failed")],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log({
@@ -591,15 +593,15 @@ class TestBuildRunLog:
 
     def test_dry_run_result(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1")]
+        epics = [_epic("RHAI-1")]
         results = {
-            PROCESSED: [("A-1", "dry-run")], SKIPPED: [],
+            PROCESSED: [("RHAI-1", "dry-run")], SKIPPED: [],
             BLOCKED: [], FAILED: [],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log({"RHAISTRAT-1": (epics, results, {}, {})}, start)
 
-        assert log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]["result"] == "dry-run"
+        assert log["strategies"]["RHAISTRAT-1"]["epics"]["RHAI-1"]["result"] == "dry-run"
 
 
 # ─── TestWriteRunLog ──────────────────────────────────────────────────────────
@@ -698,29 +700,29 @@ class TestResolveTargetRepo:
     }
 
     def test_matches_keyword_in_title(self):
-        epic = _epic("A-1", title="Update dashboard component")
+        epic = _epic("RHAI-1", title="Update dashboard component")
         result = resolve_target_repo(epic, self._MAPPING)
         assert result == "opendatahub-io/odh-dashboard"
 
     def test_matches_keyword_in_body(self):
-        epic = _epic("A-1", title="Some feature")
+        epic = _epic("RHAI-1", title="Some feature")
         epic["body"] = "This uses PatternFly components for the form"
         result = resolve_target_repo(epic, self._MAPPING)
         assert result == "opendatahub-io/odh-dashboard"
 
     def test_case_insensitive(self):
-        epic = _epic("A-1", title="DASHBOARD changes needed")
+        epic = _epic("RHAI-1", title="DASHBOARD changes needed")
         result = resolve_target_repo(epic, self._MAPPING)
         assert result == "opendatahub-io/odh-dashboard"
 
     def test_empty_mapping_returns_empty(self):
-        epic = _epic("A-1", title="Dashboard work")
+        epic = _epic("RHAI-1", title="Dashboard work")
         result = resolve_target_repo(epic, {})
         assert result == ""
 
     @mock.patch("run_pipeline.resolve_repo_via_llm", return_value="")
     def test_no_match_calls_llm(self, mock_llm):
-        epic = _epic("A-1", title="Update operator controller")
+        epic = _epic("RHAI-1", title="Update operator controller")
         result = resolve_target_repo(epic, self._MAPPING)
         mock_llm.assert_called_once()
         assert result == ""
@@ -732,7 +734,7 @@ class TestResolveTargetRepo:
             "opendatahub-io/odh-dashboard": {"keywords": ["dashboard"]},
             "opendatahub-io/other-repo": {"keywords": ["dashboard"]},
         }
-        epic = _epic("A-1", title="Fix dashboard bug")
+        epic = _epic("RHAI-1", title="Fix dashboard bug")
         result = resolve_target_repo(epic, mapping)
         mock_llm.assert_called_once()
         assert result == "opendatahub-io/odh-dashboard"
@@ -745,7 +747,7 @@ class TestResolveTargetRepo:
             "Repos: {available_repos}")
         mock_run.return_value = mock.MagicMock(
             returncode=0, stdout="opendatahub-io/odh-dashboard\n")
-        epic = _epic("A-1", title="Some operator work")
+        epic = _epic("RHAI-1", title="Some operator work")
 
         result = resolve_repo_via_llm(
             epic, self._MAPPING, str(prompt_file))
@@ -759,7 +761,7 @@ class TestResolveTargetRepo:
             "Repos: {available_repos}")
         mock_run.return_value = mock.MagicMock(
             returncode=0, stdout="NONE\n")
-        epic = _epic("A-1", title="Unknown work")
+        epic = _epic("RHAI-1", title="Unknown work")
 
         result = resolve_repo_via_llm(
             epic, self._MAPPING, str(prompt_file))
@@ -773,14 +775,14 @@ class TestResolveTargetRepo:
             "Repos: {available_repos}")
         mock_run.return_value = mock.MagicMock(
             returncode=0, stdout="some/unknown-repo\n")
-        epic = _epic("A-1", title="Unknown work")
+        epic = _epic("RHAI-1", title="Unknown work")
 
         result = resolve_repo_via_llm(
             epic, self._MAPPING, str(prompt_file))
         assert result == ""
 
     def test_llm_missing_prompt_returns_empty(self):
-        epic = _epic("A-1", title="Unknown work")
+        epic = _epic("RHAI-1", title="Unknown work")
         result = resolve_repo_via_llm(
             epic, self._MAPPING, "/nonexistent/prompt.md")
         assert result == ""
@@ -800,15 +802,15 @@ class TestTransitionIssue:
     @mock.patch("run_pipeline.get_transitions")
     def test_finds_matching_transition(self, mock_get, mock_do):
         mock_get.return_value = self._TRANSITIONS
-        ok, _ = transition_issue("s", "u", "t", "A-1", "In Progress")
+        ok, _ = transition_issue("s", "u", "t", "RHAI-1", "In Progress")
         assert ok is True
-        mock_do.assert_called_once_with("s", "u", "t", "A-1", "11")
+        mock_do.assert_called_once_with("s", "u", "t", "RHAI-1", "11")
 
     @mock.patch("run_pipeline.do_transition")
     @mock.patch("run_pipeline.get_transitions")
     def test_no_matching_transition(self, mock_get, mock_do):
         mock_get.return_value = self._TRANSITIONS
-        ok, _ = transition_issue("s", "u", "t", "A-1", "Cancelled")
+        ok, _ = transition_issue("s", "u", "t", "RHAI-1", "Cancelled")
         assert ok is False
         mock_do.assert_not_called()
 
@@ -816,14 +818,14 @@ class TestTransitionIssue:
     @mock.patch("run_pipeline.get_transitions")
     def test_case_insensitive_match(self, mock_get, mock_do):
         mock_get.return_value = self._TRANSITIONS
-        ok, _ = transition_issue("s", "u", "t", "A-1", "in progress")
+        ok, _ = transition_issue("s", "u", "t", "RHAI-1", "in progress")
         assert ok is True
-        mock_do.assert_called_once_with("s", "u", "t", "A-1", "11")
+        mock_do.assert_called_once_with("s", "u", "t", "RHAI-1", "11")
 
     @mock.patch("run_pipeline.get_transitions",
                 side_effect=Exception("Connection refused"))
     def test_handles_api_error(self, mock_get):
-        ok, _ = transition_issue("s", "u", "t", "A-1", "In Progress")
+        ok, _ = transition_issue("s", "u", "t", "RHAI-1", "In Progress")
         assert ok is False
 
     @mock.patch("run_pipeline.do_transition",
@@ -831,7 +833,7 @@ class TestTransitionIssue:
     @mock.patch("run_pipeline.get_transitions")
     def test_handles_do_transition_error(self, mock_get, mock_do):
         mock_get.return_value = self._TRANSITIONS
-        ok, _ = transition_issue("s", "u", "t", "A-1", "In Progress")
+        ok, _ = transition_issue("s", "u", "t", "RHAI-1", "In Progress")
         assert ok is False
 
 
@@ -849,18 +851,18 @@ class TestProcessStrategyTransitions:
     def test_transitions_to_in_progress_before_codegen(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
         assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
-        assert calls[1] == mock.call("s", "u", "t", "A-1", "In Progress")
+        assert calls[1] == mock.call("s", "u", "t", "RHAI-1", "In Progress")
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -872,18 +874,18 @@ class TestProcessStrategyTransitions:
     def test_transitions_to_in_review_after_success(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
         assert len(calls) == 3
-        assert calls[2] == mock.call("s", "u", "t", "A-1", "Review")
+        assert calls[2] == mock.call("s", "u", "t", "RHAI-1", "Review")
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -895,20 +897,20 @@ class TestProcessStrategyTransitions:
     def test_failure_rolls_back_to_original_status(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
         calls = mock_trans.call_args_list
         assert len(calls) == 3
         assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
-        assert calls[1] == mock.call("s", "u", "t", "A-1", "In Progress")
-        assert calls[2] == mock.call("s", "u", "t", "A-1", "New")
+        assert calls[1] == mock.call("s", "u", "t", "RHAI-1", "In Progress")
+        assert calls[2] == mock.call("s", "u", "t", "RHAI-1", "New")
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -917,12 +919,12 @@ class TestProcessStrategyTransitions:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_dry_run_skips_transitions(
             self, mock_gen, mock_dag, mock_fetch, mock_trans, mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
@@ -939,20 +941,20 @@ class TestProcessStrategyTransitions:
     def test_transitions_captured_in_log(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
         mock_trans.return_value = (True, "")
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, _, transitions_log, _ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
-        assert "A-1" in transitions_log
-        assert len(transitions_log["A-1"]) == 2
-        assert transitions_log["A-1"][0]["to"] == "In Progress"
-        assert transitions_log["A-1"][1]["to"] == "Review"
+        assert "RHAI-1" in transitions_log
+        assert len(transitions_log["RHAI-1"]) == 2
+        assert transitions_log["RHAI-1"][0]["to"] == "In Progress"
+        assert transitions_log["RHAI-1"][1]["to"] == "Review"
 
 
 # ─── TestBuildRunLogTransitions ─────────────────────────────────────────────
@@ -961,13 +963,13 @@ class TestBuildRunLogTransitions:
 
     def test_transitions_in_epic_entry(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1")]
+        epics = [_epic("RHAI-1")]
         results = {
-            PROCESSED: [("A-1", "codegen completed")],
+            PROCESSED: [("RHAI-1", "codegen completed")],
             SKIPPED: [], BLOCKED: [], FAILED: [],
         }
         transitions_log = {
-            "A-1": [
+            "RHAI-1": [
                 {"to": "In Progress", "success": True},
                 {"to": "Review", "success": True},
             ],
@@ -976,21 +978,21 @@ class TestBuildRunLogTransitions:
         log = build_run_log(
             {"RHAISTRAT-1": (epics, results, transitions_log, {})}, start)
 
-        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
-        assert epic_log["transitions"] == transitions_log["A-1"]
+        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["RHAI-1"]
+        assert epic_log["transitions"] == transitions_log["RHAI-1"]
 
     def test_empty_transitions_for_skipped(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1", jira_status="Done")]
+        epics = [_epic("RHAI-1", jira_status="Done")]
         results = {
-            PROCESSED: [], SKIPPED: [("A-1", "Already done")],
+            PROCESSED: [], SKIPPED: [("RHAI-1", "Already done")],
             BLOCKED: [], FAILED: [],
         }
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log(
             {"RHAISTRAT-1": (epics, results, {}, {})}, start)
 
-        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
+        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["RHAI-1"]
         assert epic_log["transitions"] == []
 
 
@@ -1049,7 +1051,7 @@ class TestLinkPrToJira:
                 return_value={"type": "doc", "content": []})
     def test_posts_comment_with_pr_url(self, mock_adf, mock_comment):
         result = link_pr_to_jira(
-            "s", "u", "t", "A-1",
+            "s", "u", "t", "RHAI-1",
             "https://github.com/org/repo/pull/42")
         assert result is True
         mock_adf.assert_called_once()
@@ -1062,7 +1064,7 @@ class TestLinkPrToJira:
                 return_value={"type": "doc", "content": []})
     def test_handles_api_error(self, mock_adf, mock_comment):
         result = link_pr_to_jira(
-            "s", "u", "t", "A-1",
+            "s", "u", "t", "RHAI-1",
             "https://github.com/org/repo/pull/42")
         assert result is False
 
@@ -1084,20 +1086,20 @@ class TestProcessStrategyPrLinking:
     def test_links_pr_after_successful_codegen(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
             mock_trans, mock_read_pr, mock_link, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, _, _, pr_urls = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         mock_link.assert_called_once_with(
-            "s", "u", "t", "A-1",
+            "s", "u", "t", "RHAI-1",
             "https://github.com/org/repo/pull/42")
-        assert pr_urls == {"A-1": "https://github.com/org/repo/pull/42"}
+        assert pr_urls == {"RHAI-1": "https://github.com/org/repo/pull/42"}
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.link_pr_to_jira")
@@ -1111,12 +1113,12 @@ class TestProcessStrategyPrLinking:
     def test_no_link_when_no_pr_url(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup,
             mock_trans, mock_read_pr, mock_link, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, _, _, pr_urls = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
@@ -1131,17 +1133,17 @@ class TestBuildRunLogPrUrl:
 
     def test_pr_url_in_run_log(self):
         from datetime import datetime, timezone
-        epics = [_epic("A-1")]
+        epics = [_epic("RHAI-1")]
         results = {
-            PROCESSED: [("A-1", "codegen completed")],
+            PROCESSED: [("RHAI-1", "codegen completed")],
             SKIPPED: [], BLOCKED: [], FAILED: [],
         }
-        pr_urls = {"A-1": "https://github.com/org/repo/pull/42"}
+        pr_urls = {"RHAI-1": "https://github.com/org/repo/pull/42"}
         start = datetime(2026, 6, 26, 20, 0, 0, tzinfo=timezone.utc)
         log = build_run_log(
             {"RHAISTRAT-1": (epics, results, {}, pr_urls)}, start)
 
-        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["A-1"]
+        epic_log = log["strategies"]["RHAISTRAT-1"]["epics"]["RHAI-1"]
         assert epic_log["pr_url"] == "https://github.com/org/repo/pull/42"
 
 
@@ -1176,8 +1178,8 @@ class TestLoadPrUrlsFromLogs:
             "strategies": {
                 "RHAISTRAT-1": {
                     "epics": {
-                        "A-1": {"pr_url": "https://github.com/org/repo/pull/1"},
-                        "A-2": {"pr_url": None},
+                        "RHAI-1": {"pr_url": "https://github.com/org/repo/pull/1"},
+                        "RHAI-2": {"pr_url": None},
                     }
                 }
             }
@@ -1187,7 +1189,7 @@ class TestLoadPrUrlsFromLogs:
             json.dump(log, f)
 
         result = load_pr_urls_from_logs(str(tmp_path))
-        assert result == {"A-1": "https://github.com/org/repo/pull/1"}
+        assert result == {"RHAI-1": "https://github.com/org/repo/pull/1"}
 
     def test_missing_dir_returns_empty(self, tmp_path):
         result = load_pr_urls_from_logs(str(tmp_path / "nonexistent"))
@@ -1196,12 +1198,12 @@ class TestLoadPrUrlsFromLogs:
     def test_latest_url_wins(self, tmp_path):
         log1 = {
             "strategies": {"S-1": {"epics": {
-                "A-1": {"pr_url": "https://github.com/org/repo/pull/1"},
+                "RHAI-1": {"pr_url": "https://github.com/org/repo/pull/1"},
             }}}
         }
         log2 = {
             "strategies": {"S-1": {"epics": {
-                "A-1": {"pr_url": "https://github.com/org/repo/pull/2"},
+                "RHAI-1": {"pr_url": "https://github.com/org/repo/pull/2"},
             }}}
         }
         with open(tmp_path / "a-run1.json", "w") as f:
@@ -1210,7 +1212,7 @@ class TestLoadPrUrlsFromLogs:
             json.dump(log2, f)
 
         result = load_pr_urls_from_logs(str(tmp_path))
-        assert result["A-1"] == "https://github.com/org/repo/pull/2"
+        assert result["RHAI-1"] == "https://github.com/org/repo/pull/2"
 
 
 # ─── TestProcessableStatuses ──────────────────────────────────────────────
@@ -1226,18 +1228,18 @@ class TestProcessableStatuses:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_new_epic_is_eligible(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke, _mock_setup, mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="New")):
+                        return_value=_epic("RHAI-1", jira_status="New")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[PROCESSED]) == 1
-        assert results[PROCESSED][0][0] == "A-1"
+        assert results[PROCESSED][0][0] == "RHAI-1"
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -1246,12 +1248,12 @@ class TestProcessableStatuses:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_in_progress_epic_is_skipped(
             self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="In Progress")):
+                        return_value=_epic("RHAI-1", jira_status="In Progress")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
@@ -1267,18 +1269,118 @@ class TestProcessableStatuses:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_in_review_epic_is_skipped(
             self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="Review")):
+                        return_value=_epic("RHAI-1", jira_status="Review")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[SKIPPED]) == 1
         assert len(results[PROCESSED]) == 0
+
+
+# ─── TestSkipLabel ────────────────────────────────────────────────────────
+
+class TestSkipLabel:
+    """Epics with the epic-code-gen-skip Jira label are skipped."""
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_skip_label_skips_epic(
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
+        issues = [{"key": "RHAI-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("RHAI-1",
+                                           jira_labels=[SKIP_LABEL])):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert SKIP_LABEL in results[SKIPPED][0][1]
+        assert len(results[PROCESSED]) == 0
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_skip_label_overrides_processable_status(
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
+        """Skip label takes precedence even if the Jira status is processable."""
+        issues = [{"key": "RHAI-1", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("RHAI-1", jira_status="New",
+                                           jira_labels=[SKIP_LABEL])):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert len(results[PROCESSED]) == 0
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_non_codegen_project_is_skipped(
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
+        issues = [{"key": "RHOAIUX-2897", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "RHOAIUX-2897": {"dependencies": [], "blocks": []}}
+
+        with mock.patch("run_pipeline.issue_to_epic_data",
+                        return_value=_epic("RHOAIUX-2897")):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert "not in codegen scope" in results[SKIPPED][0][1]
+        assert len(results[PROCESSED]) == 0
+
+    @mock.patch("run_pipeline.assign_issue")
+    @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
+    @mock.patch("run_pipeline.fetch_children")
+    @mock.patch("run_pipeline.build_dependency_dag")
+    @mock.patch("run_pipeline.generate_epic_task_from_jira")
+    def test_skip_label_does_not_block_dependents(
+            self, mock_gen, mock_dag, mock_fetch, _mock_trans, _mock_assign):
+        """A skip-labeled epic does NOT count as completed for dependents."""
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
+        mock_fetch.return_value = issues
+        mock_dag.return_value = {
+            "RHAI-1": {"dependencies": [], "blocks": ["RHAI-2"]},
+            "RHAI-2": {"dependencies": ["RHAI-1"], "blocks": []},
+        }
+
+        with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
+            _epic("RHAI-1", jira_labels=[SKIP_LABEL], blocks=["RHAI-2"]),
+            _epic("RHAI-2", dependencies=["RHAI-1"]),
+        ]):
+            args = _make_args(output_dir="/tmp/test-artifacts")
+            _, results, *_ = process_strategy(
+                "RHAISTRAT-1", "s", "u", "t", args)
+
+        assert len(results[SKIPPED]) == 1
+        assert results[SKIPPED][0][0] == "RHAI-1"
+        assert len(results[BLOCKED]) == 1
+        assert results[BLOCKED][0][0] == "RHAI-2"
 
 
 # ─── TestReconciliation ───────────────────────────────────────────────────
@@ -1289,23 +1391,23 @@ class TestReconciliation:
     @mock.patch("run_pipeline.check_pr_merged", return_value=True)
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.load_pr_urls_from_logs",
-                return_value={"A-1": "https://github.com/org/repo/pull/1"})
+                return_value={"RHAI-1": "https://github.com/org/repo/pull/1"})
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_merged_pr_transitions_to_done(
             self, mock_gen, mock_dag, mock_fetch, mock_logs,
             mock_trans, mock_merged, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": ["A-2"]},
-            "A-2": {"dependencies": ["A-1"], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": ["RHAI-2"]},
+            "RHAI-2": {"dependencies": ["RHAI-1"], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="Review", blocks=["A-2"]),
-            _epic("A-2", jira_status="New", dependencies=["A-1"]),
+            _epic("RHAI-1", jira_status="Review", blocks=["RHAI-2"]),
+            _epic("RHAI-2", jira_status="New", dependencies=["RHAI-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             with mock.patch("run_pipeline.invoke_codegen", return_value=True), \
@@ -1313,42 +1415,42 @@ class TestReconciliation:
                 _, results, transitions_log, _ = process_strategy(
                     "RHAISTRAT-1", "s", "u", "t", args)
 
-        mock_trans.assert_any_call("s", "u", "t", "A-1", "Done")
+        mock_trans.assert_any_call("s", "u", "t", "RHAI-1", "Done")
         assert any("merged" in s[1].lower() for s in results[SKIPPED]
-                    if s[0] == "A-1")
-        assert "A-1" in transitions_log
+                    if s[0] == "RHAI-1")
+        assert "RHAI-1" in transitions_log
         assert len(results[PROCESSED]) == 1
-        assert results[PROCESSED][0][0] == "A-2"
+        assert results[PROCESSED][0][0] == "RHAI-2"
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
     @mock.patch("run_pipeline.check_pr_merged", return_value=False)
     @mock.patch("run_pipeline.load_pr_urls_from_logs",
-                return_value={"A-1": "https://github.com/org/repo/pull/1"})
+                return_value={"RHAI-1": "https://github.com/org/repo/pull/1"})
     @mock.patch("run_pipeline.fetch_children")
     @mock.patch("run_pipeline.build_dependency_dag")
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_unmerged_pr_stays_skipped(
             self, mock_gen, mock_dag, mock_fetch, mock_logs, mock_merged, _mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}, {"key": "A-2", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}, {"key": "RHAI-2", "fields": {}}]
         mock_fetch.return_value = issues
         mock_dag.return_value = {
-            "A-1": {"dependencies": [], "blocks": ["A-2"]},
-            "A-2": {"dependencies": ["A-1"], "blocks": []},
+            "RHAI-1": {"dependencies": [], "blocks": ["RHAI-2"]},
+            "RHAI-2": {"dependencies": ["RHAI-1"], "blocks": []},
         }
 
         with mock.patch("run_pipeline.issue_to_epic_data", side_effect=[
-            _epic("A-1", jira_status="Review", blocks=["A-2"]),
-            _epic("A-2", jira_status="New", dependencies=["A-1"]),
+            _epic("RHAI-1", jira_status="Review", blocks=["RHAI-2"]),
+            _epic("RHAI-2", jira_status="New", dependencies=["RHAI-1"]),
         ]):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
 
         assert len(results[SKIPPED]) == 1
-        assert results[SKIPPED][0][0] == "A-1"
+        assert results[SKIPPED][0][0] == "RHAI-1"
         assert len(results[BLOCKED]) == 1
-        assert results[BLOCKED][0][0] == "A-2"
+        assert results[BLOCKED][0][0] == "RHAI-2"
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -1358,12 +1460,12 @@ class TestReconciliation:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_no_pr_url_stays_skipped(
             self, mock_gen, mock_dag, mock_fetch, mock_logs, _mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1", jira_status="Review")):
+                        return_value=_epic("RHAI-1", jira_status="Review")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             _, results, *_ = process_strategy(
                 "RHAISTRAT-1", "s", "u", "t", args)
@@ -1386,12 +1488,12 @@ class TestAssignment:
     def test_assigns_strat_and_epic_to_automationbot(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke,
             _mock_setup, mock_trans, mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
@@ -1400,7 +1502,7 @@ class TestAssignment:
         assert calls[0] == mock.call(
             "s", "u", "t", "RHAISTRAT-1", AUTOMATIONBOT_ACCOUNT_ID)
         assert calls[1] == mock.call(
-            "s", "u", "t", "A-1", AUTOMATIONBOT_ACCOUNT_ID)
+            "s", "u", "t", "RHAI-1", AUTOMATIONBOT_ACCOUNT_ID)
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -1412,12 +1514,12 @@ class TestAssignment:
     def test_strat_transition_to_in_progress(
             self, mock_gen, mock_dag, mock_fetch, mock_invoke,
             _mock_setup, mock_trans, _mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 
@@ -1432,12 +1534,12 @@ class TestAssignment:
     @mock.patch("run_pipeline.generate_epic_task_from_jira")
     def test_dry_run_skips_assignment_and_strat_transition(
             self, mock_gen, mock_dag, mock_fetch, mock_trans, mock_assign):
-        issues = [{"key": "A-1", "fields": {}}]
+        issues = [{"key": "RHAI-1", "fields": {}}]
         mock_fetch.return_value = issues
-        mock_dag.return_value = {"A-1": {"dependencies": [], "blocks": []}}
+        mock_dag.return_value = {"RHAI-1": {"dependencies": [], "blocks": []}}
 
         with mock.patch("run_pipeline.issue_to_epic_data",
-                        return_value=_epic("A-1")):
+                        return_value=_epic("RHAI-1")):
             args = _make_args(dry_run=True, output_dir="/tmp/test-artifacts")
             process_strategy("RHAISTRAT-1", "s", "u", "t", args)
 

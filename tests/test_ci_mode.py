@@ -59,11 +59,11 @@ class TestLoadSaveState:
             "target_repo": "mlflow/mlflow",
             "current_version": 1,
         }
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", state)
-        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1", state)
+        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
 
         assert loaded["status"] == "Ready"
-        assert loaded["epic_id"] == "E001"
+        assert loaded["epic_id"] == "RHAI-1"
         assert loaded["strategy_key"] == "RHAISTRAT-1"
         assert loaded["current_version"] == 1
 
@@ -72,16 +72,16 @@ class TestLoadSaveState:
         assert result is None
 
     def test_save_creates_directories(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         {"status": "Pending"})
-        assert (tmp_path / "RHAISTRAT-1" / "E001"
+        assert (tmp_path / "RHAISTRAT-1" / "RHAI-1"
                 / "run-metadata.yaml").exists()
 
 
 class TestCIStateMachine:
 
     def test_new_epic_no_deps_becomes_ready(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         args = _args(tmp_path)
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -91,11 +91,11 @@ class TestCIStateMachine:
         assert from_s == "Pending"
         assert to_s == "Ready"
 
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["status"] == "Ready"
 
     def test_new_epic_with_unmet_deps_becomes_blocked(self, tmp_path):
-        epic = _epic("E002", deps=["E001"])
+        epic = _epic("RHAI-2", deps=["RHAI-1"])
         args = _args(tmp_path)
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -103,13 +103,13 @@ class TestCIStateMachine:
 
         assert action == BLOCKED
         assert to_s == "Blocked"
-        assert "E001" in detail
+        assert "RHAI-1" in detail
 
     def test_new_epic_with_met_deps_becomes_ready(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         {"status": "Done"})
 
-        epic = _epic("E002", deps=["E001"])
+        epic = _epic("RHAI-2", deps=["RHAI-1"])
         args = _args(tmp_path)
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -119,7 +119,7 @@ class TestCIStateMachine:
         assert to_s == "Ready"
 
     def test_done_epic_is_skipped(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "Done", "current_version": 2}
         args = _args(tmp_path)
 
@@ -130,7 +130,7 @@ class TestCIStateMachine:
         assert "Terminal" in detail
 
     def test_failed_epic_is_skipped(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "Failed", "failure_reason": "codegen failed"}
         args = _args(tmp_path)
 
@@ -140,11 +140,11 @@ class TestCIStateMachine:
         assert action == SKIPPED
 
     def test_blocked_falls_through_to_ready_when_deps_done(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         {"status": "Done"})
 
-        epic = _epic("E002", deps=["E001"])
-        state = {"status": "Blocked", "blocked_by": ["E001"]}
+        epic = _epic("RHAI-2", deps=["RHAI-1"])
+        state = {"status": "Blocked", "blocked_by": ["RHAI-1"]}
         args = _args(tmp_path, dry_run=True)
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -154,13 +154,13 @@ class TestCIStateMachine:
         assert from_s == "Blocked"
         assert "unblocked" in detail.lower()
 
-        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "E002")
+        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-2")
         assert saved["status"] == "Ready"
         assert "blocked_by" not in saved
 
     def test_blocked_stays_blocked_with_unmet_deps(self, tmp_path):
-        epic = _epic("E002", deps=["E001"])
-        state = {"status": "Blocked", "blocked_by": ["E001"]}
+        epic = _epic("RHAI-2", deps=["RHAI-1"])
+        state = {"status": "Blocked", "blocked_by": ["RHAI-1"]}
         args = _args(tmp_path)
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -170,11 +170,11 @@ class TestCIStateMachine:
         assert to_s == "Blocked"
 
     def test_review_pending_fails_when_exhausted(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "ReviewPending", "current_version": 3,
                  "max_iterations": 3}
 
-        scores_dir = os.path.join("artifacts", "codegen-runs", "E001", "v3")
+        scores_dir = os.path.join("artifacts", "codegen-runs", "RHAI-1", "v3")
         os.makedirs(scores_dir, exist_ok=True)
         with open(os.path.join(scores_dir, "scores.json"), "w") as f:
             json.dump({"architecture": 5, "tests": 4, "lint": 6,
@@ -195,11 +195,11 @@ class TestCIStateMachine:
     def test_review_pending_near_miss_exhausted_attempts_pr(self, tmp_path,
                                                              monkeypatch):
         """Near-miss verdict when exhausted should attempt PR creation."""
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "ReviewPending", "current_version": 3,
                  "max_iterations": 3}
 
-        scores_dir = os.path.join("artifacts", "codegen-runs", "E001", "v3")
+        scores_dir = os.path.join("artifacts", "codegen-runs", "RHAI-1", "v3")
         os.makedirs(scores_dir, exist_ok=True)
         with open(os.path.join(scores_dir, "scores.json"), "w") as f:
             json.dump({
@@ -230,13 +230,13 @@ class TestCIStateMachine:
         assert action == PROCESSED
         assert to_s == "PRCreated"
         assert "Near-miss" in detail
-        assert pr_created == ["E001"]
+        assert pr_created == ["RHAI-1"]
 
         os.remove(os.path.join(scores_dir, "scores.json"))
         os.removedirs(scores_dir)
 
     def test_review_pending_skips_without_scores(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "ReviewPending", "current_version": 1}
         args = _args(tmp_path)
 
@@ -248,12 +248,12 @@ class TestCIStateMachine:
 
     def test_review_pending_iterates_on_low_scores(self, tmp_path):
         """Low scores with remaining iterations → iterate (Ready)."""
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "ReviewPending", "current_version": 1}
         args = _args(tmp_path)
 
         scores_dir = os.path.join(
-            "artifacts", "codegen-runs", "E001", "v1")
+            "artifacts", "codegen-runs", "RHAI-1", "v1")
         os.makedirs(scores_dir, exist_ok=True)
         with open(os.path.join(scores_dir, "scores.json"), "w") as f:
             json.dump({
@@ -276,7 +276,7 @@ class TestCIStateMachine:
         os.removedirs(scores_dir)
 
     def test_ready_dry_run_doesnt_invoke(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "Ready", "current_version": 0}
         args = _args(tmp_path, dry_run=True)
 
@@ -289,7 +289,7 @@ class TestCIStateMachine:
     def test_pr_created_skips_without_token(self, tmp_path, monkeypatch):
         monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "PRCreated",
                  "pr_url": "https://github.com/org/repo/pull/1"}
         args = _args(tmp_path)
@@ -303,7 +303,7 @@ class TestCIStateMachine:
                                                        monkeypatch):
         monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "PRChangesRequested",
                  "pr_url": "https://github.com/org/repo/pull/1",
                  "current_version": 1, "max_iterations": 5}
@@ -318,7 +318,7 @@ class TestCIStateMachine:
                                                      monkeypatch):
         monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "fake-token")
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "PRChangesRequested",
                  "pr_url": "https://github.com/org/repo/pull/1",
                  "current_version": 5, "max_iterations": 5}
@@ -333,18 +333,18 @@ class TestCIStateMachine:
 
     def test_init_state_has_max_iterations_10(self, tmp_path):
         """Default max_iterations should be 10."""
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         args = _args(tmp_path)
 
         ci_process_epic(epic, None, args, "srv", "usr", "tok")
 
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["max_iterations"] == 10
 
     def test_pr_changes_skips_without_pr_url(self, tmp_path, monkeypatch):
         monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "fake-token")
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "PRChangesRequested",
                  "current_version": 1, "max_iterations": 5}
         args = _args(tmp_path)
@@ -356,7 +356,7 @@ class TestCIStateMachine:
         assert "No PR URL" in detail
 
     def test_pr_changes_dry_run_does_not_invoke(self, tmp_path):
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "PRChangesRequested",
                  "pr_url": "https://github.com/org/repo/pull/1",
                  "current_version": 1, "max_iterations": 5}
@@ -367,7 +367,7 @@ class TestCIStateMachine:
 
         assert action == PROCESSED
         assert "dry-run" in detail
-        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        loaded = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert loaded is None
 
 
@@ -397,13 +397,13 @@ class TestReadyArtifactFetch:
         monkeypatch.setattr(
             "run_pipeline.setup_target_repo", fake_setup)
 
-        epic = _epic("E001", strategy_key="RHAISTRAT-99")
+        epic = _epic("RHAI-1", strategy_key="RHAISTRAT-99")
         state = {"status": "Ready", "current_version": 0}
         args = _args(tmp_path)
 
         ci_process_epic(epic, state, args, "srv", "usr", "tok")
 
-        assert calls[0] == ("generate", "E001", "artifacts/epic-tasks")
+        assert calls[0] == ("generate", "RHAI-1", "artifacts/epic-tasks")
         assert calls[1] == (
             "fetch_strategy", "RHAISTRAT-99", "artifacts/strategies")
         assert calls[2] == ("setup_target_repo",)
@@ -430,7 +430,7 @@ class TestReadyArtifactFetch:
         monkeypatch.setattr(
             "run_pipeline.setup_target_repo", fake_setup)
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "Ready", "current_version": 0}
         args = _args(tmp_path, no_strategy=True)
 
@@ -449,7 +449,7 @@ class TestReadyArtifactFetch:
         monkeypatch.setattr(
             "run_pipeline.generate_epic_task_from_jira", fake_generate)
 
-        epic = _epic("E001")
+        epic = _epic("RHAI-1")
         state = {"status": "Ready", "current_version": 0}
         args = _args(tmp_path, dry_run=True)
 
@@ -472,7 +472,7 @@ class TestReviewResponseNoOpGuard:
     def _setup(self, tmp_path, monkeypatch, response):
         import run_pipeline
 
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E010", {
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-10", {
             "status": "PRChangesRequested",
             "current_version": 3,
             "max_iterations": 10,
@@ -493,8 +493,8 @@ class TestReviewResponseNoOpGuard:
             stderr = ""
         monkeypatch.setattr(
             run_pipeline.subprocess, "run", lambda *a, **k: _Result())
-        return _epic("E010", target_repo="o/r"), load_epic_state(
-            tmp_path, "RHAISTRAT-1", "E010")
+        return _epic("RHAI-10", target_repo="o/r"), load_epic_state(
+            tmp_path, "RHAISTRAT-1", "RHAI-10")
 
     def test_noop_cycle_does_not_bump_version(self, tmp_path, monkeypatch):
         epic, state = self._setup(tmp_path, monkeypatch, {
@@ -509,7 +509,7 @@ class TestReviewResponseNoOpGuard:
 
         assert action == SKIPPED
         assert to_s == "PRCreated"
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-10")
         assert state["current_version"] == 3
 
     def test_rebase_only_cycle_counts_as_work(self, tmp_path, monkeypatch):
@@ -526,7 +526,7 @@ class TestReviewResponseNoOpGuard:
         assert action == PROCESSED
         assert "rebased onto main" in detail
         assert "2 conflict round(s)" in detail
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-10")
         assert state["current_version"] == 4
 
     def test_fixes_cycle_counts_as_work(self, tmp_path, monkeypatch):
@@ -542,7 +542,7 @@ class TestReviewResponseNoOpGuard:
 
         assert action == PROCESSED
         assert "2 fixes applied" in detail
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E010")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-10")
         assert state["current_version"] == 4
 
 
@@ -583,11 +583,11 @@ class TestForeignStatusNormalisation:
     def test_completed_with_pr_url_is_processed_as_pr_created(
             self, tmp_path, monkeypatch):
         self._stub_merged_pr(monkeypatch)
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1", self._pipeline_state(
             pr_url="https://github.com/org/repo/pull/7"))
 
-        epic = _epic("E001")
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        epic = _epic("RHAI-1")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["status"] == "PRCreated"
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -598,11 +598,11 @@ class TestForeignStatusNormalisation:
         assert to_s == "Done"
 
     def test_completed_without_pr_url_is_review_pending(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         self._pipeline_state())
 
-        epic = _epic("E001")
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        epic = _epic("RHAI-1")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["status"] == "ReviewPending"
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -626,10 +626,10 @@ class TestForeignStatusNormalisation:
         monkeypatch.setattr(run_pipeline, "link_pr_to_jira",
                             lambda *a, **k: None)
 
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         self._pipeline_state(current_version=1))
 
-        scores_dir = tmp_path / "out" / "codegen-runs" / "E001" / "v1"
+        scores_dir = tmp_path / "out" / "codegen-runs" / "RHAI-1" / "v1"
         scores_dir.mkdir(parents=True)
         (scores_dir / "scores.json").write_text(json.dumps({
             "weighted_average": 9.0,
@@ -645,8 +645,8 @@ class TestForeignStatusNormalisation:
         args = _args(tmp_path)
         args.output_dir = str(tmp_path / "out")
 
-        epic = _epic("E001")
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        epic = _epic("RHAI-1")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
 
         action, from_s, to_s, detail = ci_process_epic(
             epic, state, args, "srv", "usr", "tok")
@@ -654,7 +654,7 @@ class TestForeignStatusNormalisation:
         assert action == PROCESSED
         assert from_s == "ReviewPending"
         assert to_s == "PRCreated"
-        assert created == ["E001"]
+        assert created == ["RHAI-1"]
 
     @pytest.mark.parametrize("raw,expected", [
         ("completed", "PRCreated"),
@@ -665,21 +665,21 @@ class TestForeignStatusNormalisation:
         ("done", "Done"),
     ])
     def test_case_variants_normalise_on_load(self, tmp_path, raw, expected):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1", self._pipeline_state(
             status=raw, pr_url="https://github.com/org/repo/pull/7"))
 
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["status"] == expected
         if raw != expected:
             assert state["status_normalized_from"] == raw
 
     @pytest.mark.parametrize("raw", ["exhausted", "Exhausted", "error"])
     def test_exhausted_and_error_become_failed(self, tmp_path, raw):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         self._pipeline_state(status=raw))
 
-        epic = _epic("E001")
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        epic = _epic("RHAI-1")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert state["status"] == "Failed"
 
         action, from_s, to_s, detail = ci_process_epic(
@@ -689,10 +689,10 @@ class TestForeignStatusNormalisation:
         assert "Terminal state: Failed" in detail
 
     def test_normalisation_preserves_pipeline_fields(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", self._pipeline_state(
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1", self._pipeline_state(
             pr_url="https://github.com/org/repo/pull/7", pr_state="open"))
 
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
 
         assert state["current_version"] == 2
         assert state["max_iterations"] == 10
@@ -703,11 +703,11 @@ class TestForeignStatusNormalisation:
         assert state["strategy_key"] == "RHAISTRAT-1"
 
     def test_unknown_state_fails_loudly(self, tmp_path, caplog):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         self._pipeline_state(status="banana"))
 
-        epic = _epic("E001")
-        state = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        epic = _epic("RHAI-1")
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
 
         with caplog.at_level("ERROR"):
             action, from_s, to_s, detail = ci_process_epic(
@@ -720,15 +720,15 @@ class TestForeignStatusNormalisation:
                    for r in caplog.records)
 
     def test_unknown_state_file_is_left_intact(self, tmp_path):
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1",
                         self._pipeline_state(status="banana"))
 
-        epic = _epic("E001")
-        ci_process_epic(epic, load_epic_state(tmp_path, "RHAISTRAT-1", "E001"),
+        epic = _epic("RHAI-1")
+        ci_process_epic(epic, load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1"),
                         _args(tmp_path), "srv", "usr", "tok")
 
         raw = yaml.safe_load(
-            (tmp_path / "RHAISTRAT-1" / "E001" / "run-metadata.yaml")
+            (tmp_path / "RHAISTRAT-1" / "RHAI-1" / "run-metadata.yaml")
             .read_text())
         assert raw["status"] == "banana"
         assert raw["current_version"] == 2
@@ -740,7 +740,7 @@ class TestArtifactCopyDoesNotClobberState:
     def _setup(self, tmp_path, produced):
         import run_pipeline
 
-        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001", {
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1", {
             "status": "PRCreated",
             "target_repo": "mlflow/mlflow",
             "current_version": 2,
@@ -751,19 +751,19 @@ class TestArtifactCopyDoesNotClobberState:
             "scores": {"weighted_average": 8.4},
         })
 
-        run_dir = tmp_path / "artifacts" / "codegen-runs" / "E001"
+        run_dir = tmp_path / "artifacts" / "codegen-runs" / "RHAI-1"
         run_dir.mkdir(parents=True)
         (run_dir / "run-metadata.yaml").write_text(yaml.dump(produced))
 
         run_pipeline._copy_codegen_artifacts_to_data_repo(
-            str(tmp_path / "data"), "RHAISTRAT-1", "E001",
+            str(tmp_path / "data"), "RHAISTRAT-1", "RHAI-1",
             str(tmp_path / "artifacts"))
 
-        return load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+        return load_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1")
 
     def test_pipeline_fields_survive_and_status_is_not_taken(self, tmp_path):
         state = self._setup(tmp_path, {
-            "epic_id": "E001",
+            "epic_id": "RHAI-1",
             "status": "completed",
             "versions": 3,
             "final_score": 8.6,
@@ -787,7 +787,7 @@ class TestArtifactCopyDoesNotClobberState:
 
     def test_codegen_outcome_key_is_carried_through(self, tmp_path):
         state = self._setup(tmp_path, {
-            "epic_id": "E001",
+            "epic_id": "RHAI-1",
             "codegen_outcome": "exhausted",
             "versions": 5,
         })
@@ -799,17 +799,17 @@ class TestArtifactCopyDoesNotClobberState:
         """A later save_epic_state must not drop the merged facts."""
         import run_pipeline
 
-        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001",
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1",
                         {"status": "Generating", "current_version": 1})
-        run_dir = tmp_path / "artifacts" / "codegen-runs" / "E001"
+        run_dir = tmp_path / "artifacts" / "codegen-runs" / "RHAI-1"
         run_dir.mkdir(parents=True)
         (run_dir / "run-metadata.yaml").write_text(
             yaml.dump({"status": "completed", "versions": 1,
                        "language": "go"}))
 
-        state = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+        state = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1")
         run_pipeline._copy_codegen_artifacts_to_data_repo(
-            str(tmp_path / "data"), "RHAISTRAT-1", "E001",
+            str(tmp_path / "data"), "RHAISTRAT-1", "RHAI-1",
             str(tmp_path / "artifacts"), state)
 
         assert state["codegen_outcome"] == "completed"
@@ -817,9 +817,9 @@ class TestArtifactCopyDoesNotClobberState:
         assert state["status"] == "Generating"
 
         state["status"] = "ReviewPending"
-        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001", state)
+        save_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1", state)
 
-        reloaded = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "E001")
+        reloaded = load_epic_state(tmp_path / "data", "RHAISTRAT-1", "RHAI-1")
         assert reloaded["codegen_outcome"] == "completed"
         assert reloaded["language"] == "go"
         assert reloaded["status"] == "ReviewPending"
@@ -835,7 +835,7 @@ class TestRescueOfClobberedState:
 
     def _clobbered_state(self, tmp_path, **overrides):
         state = {
-            "epic_id": "E001",
+            "epic_id": "RHAI-1",
             "target_repo": "https://github.com/mlflow/mlflow",
             "branch": "epic/E001",
             "language": "python",
@@ -845,8 +845,8 @@ class TestRescueOfClobberedState:
             "started_at": "t0",
         }
         state.update(overrides)
-        save_epic_state(tmp_path, "RHAISTRAT-1", "E001", state)
-        return load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        save_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1", state)
+        return load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
 
     def test_versions_restores_current_version(self, tmp_path):
         state = self._clobbered_state(tmp_path)
@@ -865,7 +865,7 @@ class TestRescueOfClobberedState:
 
         state = self._clobbered_state(tmp_path)
 
-        v2 = tmp_path / "RHAISTRAT-1" / "E001" / "v2"
+        v2 = tmp_path / "RHAISTRAT-1" / "RHAI-1" / "v2"
         v2.mkdir(parents=True)
         (v2 / "scores.json").write_text(json.dumps({
             "weighted_average": 8.6,
@@ -882,13 +882,13 @@ class TestRescueOfClobberedState:
         args.output_dir = str(tmp_path / "empty-artifacts")
 
         action, from_s, to_s, detail = ci_process_epic(
-            _epic("E001"), state, args, "srv", "usr", "tok")
+            _epic("RHAI-1"), state, args, "srv", "usr", "tok")
 
         assert action == PROCESSED
         assert from_s == "ReviewPending"
         assert to_s == "PRCreated"
 
-        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "E001")
+        saved = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
         assert saved["status"] == "PRCreated"
         assert saved["pr_url"] == "https://x/pull/3"
 
@@ -906,7 +906,7 @@ class TestUnknownStateExitCode:
             run_pipeline, "process_strategy_ci",
             lambda key, s, u, t, args: ([], {
                 PROCESSED: [], SKIPPED: [], BLOCKED: [],
-                FAILED: [("E001", "Unrecognised state 'completed'")],
+                FAILED: [("RHAI-1", "Unrecognised state 'completed'")],
             }, []))
 
         rc = run_pipeline.main([

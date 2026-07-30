@@ -34,10 +34,14 @@ from jira_utils import adf_to_markdown, require_env, search_issues
 
 _CHILD_FIELDS = [
     "summary", "description", "status", "priority",
-    "issuelinks", "components",
+    "issuelinks", "components", "labels",
 ]
 
 DONE_STATUSES = {"Done", "Closed", "Resolved"}
+
+SKIP_LABEL = "epic-code-gen-skip"
+
+CODEGEN_PROJECTS = {"RHAI"}
 
 
 def fetch_children(server, user, token, parent_key):
@@ -104,6 +108,8 @@ def issue_to_epic_data(issue, parent_key, dag):
     components = [c.get("name", "") for c in fields.get("components", [])
                   if c.get("name")]
 
+    labels = [lbl for lbl in fields.get("labels", []) if lbl]
+
     dependencies = deps.get("dependencies", [])
     blocks = deps.get("blocks", [])
 
@@ -116,6 +122,7 @@ def issue_to_epic_data(issue, parent_key, dag):
         "status": "Pending",
         "jira_status": fields.get("status", {}).get("name"),
         "components": components or None,
+        "jira_labels": labels or None,
         "dependencies": sorted(dependencies) if dependencies else None,
         "blocks": sorted(blocks) if blocks else None,
         "body": body,
@@ -144,14 +151,38 @@ def generate_epic_task_from_jira(epic_data, output_dir="artifacts/epic-tasks"):
     return path
 
 
+def _jira_project(epic_id):
+    """Extract the Jira project key from an issue key (e.g. 'RHAI' from 'RHAI-68')."""
+    return epic_id.rsplit("-", 1)[0] if "-" in epic_id else epic_id
+
+
+def is_codegen_project(epic_data):
+    """Check if an epic belongs to a project eligible for codegen."""
+    return _jira_project(epic_data.get("epic_id", "")) in CODEGEN_PROJECTS
+
+
+def has_skip_label(epic_data):
+    """Check if an epic has the skip label."""
+    labels = epic_data.get("jira_labels") or []
+    return SKIP_LABEL in labels
+
+
 def is_eligible(epic_data, all_epics_by_key):
     """Determine if an epic is eligible for codegen.
 
-    Eligible means: not done AND all dependencies are done.
+    Eligible means: in a codegen project, not skip-labeled, not done,
+    AND all dependencies are done.
 
     Returns:
         (eligible: bool, reason: str)
     """
+    if not is_codegen_project(epic_data):
+        project = _jira_project(epic_data.get("epic_id", ""))
+        return False, f"Project {project} not in {sorted(CODEGEN_PROJECTS)}"
+
+    if has_skip_label(epic_data):
+        return False, f"Skipped ({SKIP_LABEL})"
+
     jira_status = epic_data.get("jira_status", "")
     if jira_status in DONE_STATUSES:
         return False, "Already done"
@@ -188,6 +219,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports",
     eligible_count = 0
     blocked_count = 0
     done_count = 0
+    skipped_count = 0
 
     rows = []
     for epic in epics:
@@ -197,6 +229,8 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports",
         eligible, reason = is_eligible(epic, epics_by_key)
         if eligible:
             eligible_count += 1
+        elif has_skip_label(epic):
+            skipped_count += 1
         elif jira_status in DONE_STATUSES:
             done_count += 1
         else:
@@ -215,7 +249,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports",
     html_content = _render_report_html(
         parent_key, timestamp, rows, status_counts,
         len(epics), eligible_count, blocked_count, done_count,
-        epics, codegen_runs_dir, pr_urls,
+        epics, codegen_runs_dir, pr_urls, skipped_count,
     )
 
     with open(path, "w", encoding="utf-8") as f:
@@ -226,7 +260,7 @@ def generate_status_report(epics, parent_key, output_dir="epic-reports",
 
 def _render_report_html(parent_key, timestamp, rows, status_counts,
                         total, eligible, blocked, done, epics,
-                        codegen_runs_dir=None, pr_urls=None):
+                        codegen_runs_dir=None, pr_urls=None, skipped=0):
     """Render the full HTML report string."""
     jira_base = os.environ.get("JIRA_SERVER", "https://redhat.atlassian.net")
     jira_base = jira_base.rstrip("/")
@@ -247,12 +281,15 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
         "    classDef done fill:#198754,stroke:#198754,color:#fff",
         "    classDef blocked fill:#dc3545,stroke:#dc3545,color:#fff",
         "    classDef eligible fill:#0d6efd,stroke:#0d6efd,color:#fff",
+        "    classDef skipped fill:#6c757d,stroke:#6c757d,color:#fff",
     ]
     for epic in epics:
         key = epic["epic_id"]
         node_id = _mermaid_id(key)
         jira_status = epic.get("jira_status", "")
-        if jira_status in DONE_STATUSES:
+        if has_skip_label(epic):
+            style = "skipped"
+        elif jira_status in DONE_STATUSES:
             style = "done"
         elif any(d for d in (epic.get("dependencies") or [])
                  if d in {e["epic_id"] for e in epics
@@ -286,6 +323,8 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
 
         if row["eligible"]:
             eligible_badge = '<span class="badge badge-high">Eligible</span>'
+        elif SKIP_LABEL in row.get("reason", ""):
+            eligible_badge = '<span class="badge badge-muted">Skipped</span>'
         elif row["jira_status"] in DONE_STATUSES:
             eligible_badge = '<span class="badge badge-impl">Done</span>'
         else:
@@ -458,6 +497,7 @@ def _render_report_html(parent_key, timestamp, rows, status_counts,
   <div class="stat-card"><div class="stat-value">{total}</div><div class="stat-label">Total</div></div>
   <div class="stat-card highlight"><div class="stat-value" style="color:var(--high)">{eligible}</div><div class="stat-label">Eligible</div></div>
   <div class="stat-card"><div class="stat-value" style="color:var(--low)">{blocked}</div><div class="stat-label">Blocked</div></div>
+  <div class="stat-card"><div class="stat-value" style="color:var(--muted)">{skipped}</div><div class="stat-label">Skipped</div></div>
   <div class="stat-card"><div class="stat-value" style="color:var(--muted)">{done}</div><div class="stat-label">Done</div></div>
   {status_cards}
 </div>

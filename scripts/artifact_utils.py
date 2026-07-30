@@ -191,6 +191,11 @@ SCHEMAS = {
             "required": False,
             "default": None,
         },
+        "jira_labels": {
+            "type": "list",
+            "required": False,
+            "default": None,
+        },
         "dependencies": {
             "type": "list",
             "required": False,

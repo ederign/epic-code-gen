@@ -1,6 +1,9 @@
 {
   "opendatahub-io/odh-dashboard": {
-    "keywords": ["dashboard", "frontend", "patternfly", "ui", "gen-ai-ui", "gen ai studio"]
+    "keywords": ["dashboard", "frontend", "patternfly", "ui", "gen-ai-ui", "gen ai studio", "automl-ui", "AI Core Dashboard"]
+  },
+  "opendatahub-io/pipelines-components": {
+    "keywords": ["pipelines-components", "pipeline components", "autogluon", "automl", "data_loader", "tabular_data_loader", "timeseries_data_loader", "leaderboard_evaluation"]
   },
   "opendatahub-io/mlflow-go": {
     "keywords": ["mlflow-go", "mlflow go", "go sdk", "mlflow go sdk"]

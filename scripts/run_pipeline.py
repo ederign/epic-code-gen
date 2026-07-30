@@ -48,11 +48,15 @@ from artifact_utils import (
 )
 from fetch_epic import fetch_strategy
 from fetch_jira_epics import (
+    CODEGEN_PROJECTS,
     DONE_STATUSES,
+    SKIP_LABEL,
     build_dependency_dag,
     fetch_children,
     generate_epic_task_from_jira,
     generate_status_report,
+    has_skip_label,
+    is_codegen_project,
     is_eligible,
     issue_to_epic_data,
 )
@@ -686,6 +690,18 @@ def process_strategy(strategy_key, server, user, token, args):
     known_pr_urls = load_pr_urls_from_logs(args.log_dir)
 
     for key, epic in all_epics_by_key.items():
+        if not is_codegen_project(epic):
+            results[SKIPPED].append((key, "Project not in codegen scope"))
+            print(f"  {key}: SKIP (project not in {sorted(CODEGEN_PROJECTS)})")
+            handled_keys.add(key)
+            continue
+
+        if has_skip_label(epic):
+            results[SKIPPED].append((key, f"Skipped ({SKIP_LABEL})"))
+            print(f"  {key}: SKIP (label: {SKIP_LABEL})")
+            handled_keys.add(key)
+            continue
+
         status = epic.get("jira_status")
         if status in PROCESSABLE_STATUSES:
             continue
@@ -1108,6 +1124,12 @@ def ci_process_epic(epic, state, args, server, user, token):
     # a state dict read some other way.
     normalize_epic_state(state)
     current = state.get("status", "Pending")
+
+    if not is_codegen_project(epic):
+        return SKIPPED, current, current, "Project not in codegen scope"
+
+    if has_skip_label(epic):
+        return SKIPPED, current, current, f"Skipped ({SKIP_LABEL})"
 
     if current in CI_TERMINAL_STATES:
         return SKIPPED, current, current, f"Terminal state: {current}"

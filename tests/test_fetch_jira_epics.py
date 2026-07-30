@@ -11,10 +11,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from artifact_utils import read_frontmatter_validated
 from fetch_jira_epics import (
+    CODEGEN_PROJECTS,
+    SKIP_LABEL,
     build_dependency_dag,
     fetch_children,
     generate_epic_task_from_jira,
     generate_status_report,
+    has_skip_label,
+    is_codegen_project,
     is_eligible,
     issue_to_epic_data,
 )
@@ -23,7 +27,8 @@ from fetch_jira_epics import (
 # ─── Test Fixtures ────────────────────────────────────────────────────────────
 
 def _make_issue(key, summary="Test issue", status="To Do",
-                issuelinks=None, components=None, description=None):
+                issuelinks=None, components=None, description=None,
+                labels=None):
     """Build a minimal Jira issue dict."""
     return {
         "key": key,
@@ -34,6 +39,7 @@ def _make_issue(key, summary="Test issue", status="To Do",
             "issuelinks": issuelinks or [],
             "components": [{"name": c} for c in (components or [])],
             "description": description,
+            "labels": labels or [],
         },
     }
 
@@ -212,6 +218,19 @@ class TestIssueToEpicData:
         result = issue_to_epic_data(issue, "RHAISTRAT-1", dag)
         assert result["dependencies"] == ["RHOAIENG-1", "RHOAIENG-2"]
 
+    def test_labels_extracted(self):
+        issue = _make_issue("RHOAIENG-1",
+                            labels=["epic-code-gen-skip", "needs-review"])
+        dag = {"RHOAIENG-1": {"dependencies": [], "blocks": []}}
+        result = issue_to_epic_data(issue, "RHAISTRAT-1", dag)
+        assert result["jira_labels"] == ["epic-code-gen-skip", "needs-review"]
+
+    def test_no_labels_gives_none(self):
+        issue = _make_issue("RHOAIENG-1")
+        dag = {"RHOAIENG-1": {"dependencies": [], "blocks": []}}
+        result = issue_to_epic_data(issue, "RHAISTRAT-1", dag)
+        assert result["jira_labels"] is None
+
 
 # ─── generate_epic_task_from_jira ────────────────────────────────────────────
 
@@ -283,53 +302,111 @@ class TestGenerateEpicTask:
 class TestIsEligible:
 
     def test_no_deps_not_done(self):
-        epic = {"epic_id": "A-1", "jira_status": "To Do", "dependencies": None}
+        epic = {"epic_id": "RHAI-1", "jira_status": "To Do", "dependencies": None}
         eligible, reason = is_eligible(epic, {})
         assert eligible is True
         assert reason == "Ready"
 
     def test_done_not_eligible(self):
-        epic = {"epic_id": "A-1", "jira_status": "Done", "dependencies": None}
+        epic = {"epic_id": "RHAI-1", "jira_status": "Done", "dependencies": None}
         eligible, reason = is_eligible(epic, {})
         assert eligible is False
         assert "Already done" in reason
 
     def test_closed_not_eligible(self):
-        epic = {"epic_id": "A-1", "jira_status": "Closed", "dependencies": None}
+        epic = {"epic_id": "RHAI-1", "jira_status": "Closed", "dependencies": None}
         eligible, _ = is_eligible(epic, {})
         assert eligible is False
 
     def test_resolved_not_eligible(self):
-        epic = {"epic_id": "A-1", "jira_status": "Resolved", "dependencies": None}
+        epic = {"epic_id": "RHAI-1", "jira_status": "Resolved", "dependencies": None}
         eligible, _ = is_eligible(epic, {})
         assert eligible is False
 
     def test_blocked_by_undone_dep(self):
-        epic = {"epic_id": "A-2", "jira_status": "To Do",
-                "dependencies": ["A-1"]}
-        all_epics = {"A-1": {"epic_id": "A-1", "jira_status": "In Progress"}}
+        epic = {"epic_id": "RHAI-2", "jira_status": "To Do",
+                "dependencies": ["RHAI-1"]}
+        all_epics = {"RHAI-1": {"epic_id": "RHAI-1", "jira_status": "In Progress"}}
         eligible, reason = is_eligible(epic, all_epics)
         assert eligible is False
-        assert "A-1" in reason
+        assert "RHAI-1" in reason
 
     def test_all_deps_done(self):
-        epic = {"epic_id": "A-2", "jira_status": "To Do",
-                "dependencies": ["A-1"]}
-        all_epics = {"A-1": {"epic_id": "A-1", "jira_status": "Done"}}
+        epic = {"epic_id": "RHAI-2", "jira_status": "To Do",
+                "dependencies": ["RHAI-1"]}
+        all_epics = {"RHAI-1": {"epic_id": "RHAI-1", "jira_status": "Done"}}
         eligible, reason = is_eligible(epic, all_epics)
         assert eligible is True
 
     def test_multiple_deps_one_undone(self):
-        epic = {"epic_id": "A-3", "jira_status": "To Do",
-                "dependencies": ["A-1", "A-2"]}
+        epic = {"epic_id": "RHAI-3", "jira_status": "To Do",
+                "dependencies": ["RHAI-1", "RHAI-2"]}
         all_epics = {
-            "A-1": {"epic_id": "A-1", "jira_status": "Done"},
-            "A-2": {"epic_id": "A-2", "jira_status": "To Do"},
+            "RHAI-1": {"epic_id": "RHAI-1", "jira_status": "Done"},
+            "RHAI-2": {"epic_id": "RHAI-2", "jira_status": "To Do"},
         }
         eligible, reason = is_eligible(epic, all_epics)
         assert eligible is False
-        assert "A-2" in reason
-        assert "A-1" not in reason
+        assert "RHAI-2" in reason
+        assert "RHAI-1" not in reason
+
+    def test_skip_label_not_eligible(self):
+        epic = {"epic_id": "RHAI-1", "jira_status": "To Do",
+                "dependencies": None, "jira_labels": [SKIP_LABEL]}
+        eligible, reason = is_eligible(epic, {})
+        assert eligible is False
+        assert SKIP_LABEL in reason
+
+    def test_skip_label_takes_precedence_over_ready(self):
+        epic = {"epic_id": "RHAI-1", "jira_status": "New",
+                "dependencies": None, "jira_labels": [SKIP_LABEL]}
+        eligible, reason = is_eligible(epic, {})
+        assert eligible is False
+
+
+# ─── has_skip_label ──────────────────────────────────────────────────────────
+
+class TestHasSkipLabel:
+
+    def test_with_skip_label(self):
+        assert has_skip_label({"jira_labels": [SKIP_LABEL]}) is True
+
+    def test_without_skip_label(self):
+        assert has_skip_label({"jira_labels": ["other"]}) is False
+
+    def test_no_labels(self):
+        assert has_skip_label({"jira_labels": None}) is False
+
+    def test_missing_key(self):
+        assert has_skip_label({}) is False
+
+    def test_among_other_labels(self):
+        assert has_skip_label(
+            {"jira_labels": ["team-a", SKIP_LABEL, "priority"]}) is True
+
+
+# ─── is_codegen_project ─────────────────────────────────────────────────────
+
+class TestIsCodegenProject:
+
+    def test_rhai_project(self):
+        assert is_codegen_project({"epic_id": "RHAI-68"}) is True
+
+    def test_rhoaiux_project(self):
+        assert is_codegen_project({"epic_id": "RHOAIUX-2897"}) is False
+
+    def test_rhoaieng_project(self):
+        assert is_codegen_project({"epic_id": "RHOAIENG-72103"}) is False
+
+    def test_missing_epic_id(self):
+        assert is_codegen_project({}) is False
+
+    def test_non_rhai_not_eligible(self):
+        epic = {"epic_id": "RHOAIUX-2897", "jira_status": "New",
+                "dependencies": None}
+        eligible, reason = is_eligible(epic, {})
+        assert eligible is False
+        assert "RHOAIUX" in reason
 
 
 # ─── generate_status_report ──────────────────────────────────────────────────
