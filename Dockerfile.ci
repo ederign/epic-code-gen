@@ -37,7 +37,7 @@ ENV GOPATH="/home/claude-ci/go"
 RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
     && dnf install -y --nodocs nodejs \
     && dnf clean all \
-    && npm install -g yarn
+    && npm install -g yarn markdownlint-cli
 
 # Python packages needed by epic-code-gen
 RUN pip3 install --no-cache-dir pyyaml pytest
