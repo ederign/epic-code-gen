@@ -86,6 +86,13 @@ AUTOMATIONBOT_ACCOUNT_ID = "712020:9efc6a2a-8d76-4879-b330-502b84a3e040"
 # outcome vocabulary and the mapping between them.
 CI_TERMINAL_STATES = {"Done", "Failed"}
 
+# Seconds reserved inside a review-response budget for everything that is not
+# the fix agent: clone, rebase (which may itself run a conflict agent),
+# triage, validation retries, commit, push and one PR reply per comment.
+# Subtracted from the per-epic --timeout to size the fix agent, so the two
+# limits cannot both be spent on the same second.
+REVIEW_RESPONSE_OVERHEAD = 900
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "config")
 
@@ -508,6 +515,21 @@ def _get_node_major():
         return int(ver.split(".")[0])
     except Exception:
         return None
+
+
+def _as_text(stream):
+    """Decode a subprocess stream that may be bytes, str or None."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return stream
+
+
+def _indent_block(text, prefix="    | "):
+    """Prefix each line of a subprocess's output so it reads as nested."""
+    lines = _as_text(text).rstrip().split("\n")
+    return "\n".join(prefix + line for line in lines)
 
 
 def _run_cmd(cmd, cwd=None, label=None, timeout=600):
@@ -1525,17 +1547,48 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
     if args.dry_run:
         cmd.append("--dry-run")
 
+    # Budget. This was hardcoded to 1200s while the fix agent alone allowed 900
+    # and the sanity check 300 — exactly 1200, with nothing left for the
+    # rebase, triage, validation, push or PR replies between them, so the outer
+    # limit could fire even with both agents inside theirs. Answering a review
+    # is comparable work to a codegen iteration, so it gets the same per-epic
+    # budget (--timeout, 6h in CI) and the fix agent is sized to leave slack
+    # for everything that runs around it.
+    review_timeout = args.timeout
+    agent_timeout = max(600, review_timeout - REVIEW_RESPONSE_OVERHEAD)
+    cmd += ["--agent-timeout", str(agent_timeout)]
+
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1200)
+            cmd, capture_output=True, text=True, timeout=review_timeout)
 
         if result.stdout.strip():
             response = json.loads(result.stdout.strip())
         else:
             response = {"success": False, "errors": [result.stderr]}
 
-    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        response = {"success": False, "errors": [str(e)]}
+        # review_response.py narrates its progress and its failure causes on
+        # stderr. This used to be surfaced only when stdout was empty, so a
+        # run that returned well-formed JSON reporting a failure discarded the
+        # explanation for it — the reason RHAI-68's timeout was invisible.
+        if result.stderr.strip() and not response.get("success"):
+            print(_indent_block(result.stderr), file=sys.stderr)
+
+    except subprocess.TimeoutExpired as e:
+        response = {
+            "success": False,
+            "errors": [f"review_response.py timed out after "
+                       f"{review_timeout}s"],
+        }
+        if e.stderr:
+            print(_indent_block(_as_text(e.stderr)), file=sys.stderr)
+    except json.JSONDecodeError as e:
+        response = {
+            "success": False,
+            "errors": [f"review_response.py emitted unparseable JSON: {e}"],
+        }
+        if result.stderr.strip():
+            print(_indent_block(result.stderr), file=sys.stderr)
 
     _copy_codegen_artifacts_to_data_repo(
         args.data_repo, epic["strategy_key"], epic_id, args.output_dir, state)

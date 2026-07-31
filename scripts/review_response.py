@@ -46,6 +46,37 @@ CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "config", "review_config.json")
 
 
+def _env_int(name, default):
+    """Read a positive int from the environment, falling back to default."""
+    try:
+        value = int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+# Agent budgets. Answering a substantive human review is comparable work to a
+# codegen iteration, which CI gives 6h — so 15 minutes was never enough. It
+# killed RHAI-68 mid-fix against a 14 KB review (see RHAIFIRST-391 sibling
+# ticket); the only prior cycle that fit was an 837-byte "run the formatter".
+# The caller passes its own budget via --agent-timeout; these are the defaults
+# and the env overrides for running the script directly.
+FIX_AGENT_TIMEOUT = _env_int("REVIEW_FIX_AGENT_TIMEOUT", 3600)
+SANITY_CHECK_TIMEOUT = _env_int("REVIEW_SANITY_CHECK_TIMEOUT", 600)
+
+# How much of a claude subprocess's output to keep in an error message. Enough
+# to name the cause without pasting a whole transcript into run-metadata.yaml.
+_OUTPUT_TAIL_CHARS = 2000
+
+
+def _tail(text, limit=_OUTPUT_TAIL_CHARS):
+    """Last `limit` characters of text, marked if truncated."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return "...(truncated)... " + text[-limit:]
+
+
 def load_review_config():
     """Load bot reviewer list and settings from config."""
     with open(CONFIG_PATH) as f:
@@ -265,13 +296,20 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                         target_repo=".target-repo", version=2,
                         dry_run=False, gh_token_var=None,
                         base_branch=None, fork_remote="fork",
-                        skip_rebase=False):
+                        skip_rebase=False, agent_timeout=None):
     """Execute the full V2 review response flow.
+
+    Args:
+        agent_timeout: seconds the fix agent may run. Defaults to
+            FIX_AGENT_TIMEOUT; callers should size it below their own budget so
+            the rebase, triage, validation and push still fit inside.
 
     Returns:
         dict: {success, comments_processed, fixes_applied, commit_sha,
                rebase, errors}
     """
+    if agent_timeout is None:
+        agent_timeout = FIX_AGENT_TIMEOUT
     token = require_env(gh_token_var)
     config = load_review_config()
     bot_reviewers = set(config.get("bot_reviewers", []))
@@ -397,11 +435,12 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
         fix_prompt = _build_fix_prompt(
             plan_path, feedback_path, spec_path, target_repo, version)
 
-        fix_success = _invoke_claude(fix_prompt, target_repo)
+        fix_success, fix_reason = _invoke_claude(
+            fix_prompt, target_repo, timeout=agent_timeout)
 
         if not fix_success:
-            errors.append("Fix agent failed")
-            print("  Fix agent FAILED.", file=sys.stderr)
+            errors.append(fix_reason or "Fix agent failed")
+            print(f"  Fix agent FAILED: {fix_reason}", file=sys.stderr)
         else:
             # 7. Run validation with retry
             for attempt in range(1, max_retries + 1):
@@ -526,18 +565,43 @@ def _build_validation_retry_prompt(val_result, target_repo):
     )
 
 
-def _invoke_claude(prompt, cwd):
-    """Invoke Claude as a subprocess. Returns True on success."""
+def _invoke_claude(prompt, cwd, timeout=None):
+    """Invoke Claude as a subprocess.
+
+    Returns:
+        tuple: (success, reason). `reason` is "" on success and names the real
+        cause on failure.
+
+    This used to return a bare bool while capturing stdout/stderr that nothing
+    ever read, so a timeout, a non-zero exit and a missing binary all reached
+    the caller as the same opaque "Fix agent failed" — which is how RHAI-68's
+    15-minute timeout took a full log inspection and wall-clock arithmetic to
+    identify. The cause travels with the failure now.
+    """
+    if timeout is None:
+        timeout = FIX_AGENT_TIMEOUT
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--dangerously-skip-permissions",
              "--output-format", "text"],
-            capture_output=True, text=True, cwd=cwd, timeout=900,
+            capture_output=True, text=True, cwd=cwd, timeout=timeout,
         )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        print(f"  Claude invocation error: {e}", file=sys.stderr)
-        return False
+    except subprocess.TimeoutExpired:
+        reason = (f"fix agent timed out after {timeout}s — raise "
+                  f"REVIEW_FIX_AGENT_TIMEOUT or --agent-timeout")
+        print(f"  {reason}", file=sys.stderr)
+        return False, reason
+    except FileNotFoundError as e:
+        reason = f"claude CLI not found: {e}"
+        print(f"  {reason}", file=sys.stderr)
+        return False, reason
+
+    if result.returncode != 0:
+        detail = _tail(result.stderr) or _tail(result.stdout) or "no output"
+        reason = f"fix agent exited {result.returncode}: {detail}"
+        print(f"  {reason}", file=sys.stderr)
+        return False, reason
+    return True, ""
 
 
 def _run_sanity_check(plan_path, diff_path, feedback_path, version_dir, cwd):
@@ -556,7 +620,8 @@ def _run_sanity_check(plan_path, diff_path, feedback_path, version_dir, cwd):
         subprocess.run(
             ["claude", "-p", prompt, "--dangerously-skip-permissions",
              "--output-format", "text"],
-            capture_output=True, text=True, cwd=cwd, timeout=300,
+            capture_output=True, text=True, cwd=cwd,
+            timeout=SANITY_CHECK_TIMEOUT,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         print(f"  Sanity check error: {e}", file=sys.stderr)
@@ -585,6 +650,11 @@ def main():
                         help="Base branch to rebase onto (default: detect)")
     parser.add_argument("--skip-rebase", action="store_true",
                         help="Don't rebase onto upstream before fixing")
+    parser.add_argument("--agent-timeout", type=int, default=None,
+                        help="Seconds the fix agent may run "
+                             f"(default: {FIX_AGENT_TIMEOUT}). Must leave "
+                             "room inside the caller's own budget for the "
+                             "rebase, validation and push.")
     parser.add_argument("--json", action="store_true",
                         help="Output result as JSON")
     args = parser.parse_args()
@@ -600,6 +670,7 @@ def main():
             gh_token_var=args.gh_token_var,
             base_branch=args.base_branch,
             skip_rebase=args.skip_rebase,
+            agent_timeout=args.agent_timeout,
         )
 
         if args.json:

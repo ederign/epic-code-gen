@@ -600,3 +600,142 @@ class TestRunValidationReadsRealVerdict:
         self._fake_run({"checks": []}, monkeypatch)
         passed, _ = review_response.run_validation(".")
         assert passed is False
+
+
+class TestInvokeClaudeReportsWhyItFailed:
+    """_invoke_claude used to return a bare bool while capturing stdout and
+    stderr that nothing ever read, so a timeout, a non-zero exit and a missing
+    binary all reached the caller as the same opaque "Fix agent failed".
+    Identifying RHAI-68's 15-minute timeout took a log trawl and wall-clock
+    arithmetic; the cause has to travel with the failure.
+    """
+
+    def test_timeout_names_the_limit_it_hit(self, monkeypatch):
+        import review_response
+        import subprocess
+
+        def _boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=k["timeout"])
+        monkeypatch.setattr(review_response.subprocess, "run", _boom)
+
+        ok, reason = review_response._invoke_claude("p", ".", timeout=1234)
+        assert ok is False
+        assert "timed out" in reason
+        assert "1234" in reason
+
+    def test_nonzero_exit_carries_the_agent_stderr(self, monkeypatch):
+        import review_response
+
+        class _Result:
+            returncode = 3
+            stdout = ""
+            stderr = "Error: credit balance too low"
+        monkeypatch.setattr(
+            review_response.subprocess, "run", lambda *a, **k: _Result())
+
+        ok, reason = review_response._invoke_claude("p", ".")
+        assert ok is False
+        assert "exited 3" in reason
+        assert "credit balance too low" in reason
+
+    def test_falls_back_to_stdout_when_stderr_is_empty(self, monkeypatch):
+        import review_response
+
+        class _Result:
+            returncode = 1
+            stdout = "something went wrong on stdout"
+            stderr = ""
+        monkeypatch.setattr(
+            review_response.subprocess, "run", lambda *a, **k: _Result())
+
+        _, reason = review_response._invoke_claude("p", ".")
+        assert "something went wrong on stdout" in reason
+
+    def test_missing_cli_is_distinguishable_from_a_timeout(self, monkeypatch):
+        import review_response
+
+        def _boom(*a, **k):
+            raise FileNotFoundError("claude")
+        monkeypatch.setattr(review_response.subprocess, "run", _boom)
+
+        ok, reason = review_response._invoke_claude("p", ".")
+        assert ok is False
+        assert "not found" in reason
+        assert "timed out" not in reason
+
+    def test_success_reports_no_reason(self, monkeypatch):
+        import review_response
+
+        class _Result:
+            returncode = 0
+            stdout = "done"
+            stderr = ""
+        monkeypatch.setattr(
+            review_response.subprocess, "run", lambda *a, **k: _Result())
+
+        ok, reason = review_response._invoke_claude("p", ".")
+        assert ok is True
+        assert reason == ""
+
+    def test_caller_supplied_timeout_is_used_over_the_default(self,
+                                                              monkeypatch):
+        import review_response
+        seen = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _capture(*a, **k):
+            seen["timeout"] = k["timeout"]
+            return _Result()
+        monkeypatch.setattr(review_response.subprocess, "run", _capture)
+
+        review_response._invoke_claude("p", ".", timeout=4242)
+        assert seen["timeout"] == 4242
+
+    def test_default_timeout_is_not_the_old_fifteen_minutes(self):
+        """900s killed the only substantive review response we have tried."""
+        import review_response
+        assert review_response.FIX_AGENT_TIMEOUT > 900
+
+
+class TestReviewResponseBudgetNesting:
+    """The fix agent (900s) plus the sanity check (300s) exactly equalled the
+    outer review_response budget (1200s), leaving nothing for the rebase,
+    triage, validation, push or PR replies — so the outer limit could fire
+    with both agents inside theirs.
+    """
+
+    def test_agent_budget_leaves_room_inside_the_outer_budget(self):
+        import run_pipeline
+        for per_epic in (3600, 21600):
+            agent = max(600, per_epic - run_pipeline.REVIEW_RESPONSE_OVERHEAD)
+            assert agent < per_epic, "fix agent must fit inside the outer run"
+            assert per_epic - agent >= 900, "too little slack for the rest"
+
+    def test_tiny_budget_still_gives_the_agent_a_floor(self):
+        import run_pipeline
+        agent = max(600, 60 - run_pipeline.REVIEW_RESPONSE_OVERHEAD)
+        assert agent == 600
+
+
+class TestIndentBlockSurfacesSubprocessOutput:
+    """review_response.py's stderr was surfaced only when stdout was empty, so
+    a run returning well-formed JSON that reported a failure discarded the
+    explanation for it.
+    """
+
+    def test_each_line_is_prefixed(self):
+        import run_pipeline
+        out = run_pipeline._indent_block("first\nsecond")
+        assert out == "    | first\n    | second"
+
+    def test_bytes_are_decoded(self):
+        import run_pipeline
+        assert "boom" in run_pipeline._indent_block(b"boom")
+
+    def test_none_does_not_explode(self):
+        import run_pipeline
+        assert run_pipeline._indent_block(None) == "    | "
