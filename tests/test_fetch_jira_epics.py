@@ -396,7 +396,7 @@ class TestIsCodegenProject:
         assert is_codegen_project({"epic_id": "RHOAIUX-2897"}) is False
 
     def test_rhoaieng_project(self):
-        assert is_codegen_project({"epic_id": "RHOAIENG-72103"}) is False
+        assert is_codegen_project({"epic_id": "RHOAIENG-72103"}) is True
 
     def test_missing_epic_id(self):
         assert is_codegen_project({}) is False
