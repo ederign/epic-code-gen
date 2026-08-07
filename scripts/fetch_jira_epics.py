@@ -41,7 +41,12 @@ DONE_STATUSES = {"Done", "Closed", "Resolved"}
 
 SKIP_LABEL = "epic-code-gen-skip"
 
-CODEGEN_PROJECTS = {"RHAI"}
+# Jira projects whose epics carry code work. This is an allowlist, so a
+# project missing here is skipped silently on every run — RHOAIENG was left
+# out when the filter landed, which stalled RHAISTRAT-1749 and -1699 (all
+# their children live in RHOAIENG). Design work stays out on purpose:
+# RHOAIUX epics describe mockups, not code.
+CODEGEN_PROJECTS = {"RHAI", "RHOAIENG"}
 
 
 def fetch_children(server, user, token, parent_key):
