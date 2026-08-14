@@ -39,6 +39,12 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
     && dnf clean all \
     && npm install -g yarn markdownlint-cli
 
+# JS/TS check tooling. `npm run lint` prepends the repo's node_modules/.bin,
+# so a repo that pins its own eslint/tsc/vitest still gets that one; these are
+# the fallback for when it does not resolve, which otherwise exits 127 and
+# makes every JS check unrunnable.
+RUN npm install -g eslint typescript vitest
+
 # Python packages needed by epic-code-gen
 RUN pip3 install --no-cache-dir pyyaml pytest
 
@@ -90,6 +96,9 @@ RUN python3 --version \
     && go version \
     && node --version \
     && npm --version \
+    && eslint --version \
+    && tsc --version \
+    && vitest --version \
     && runuser -u claude-ci -- claude --version
 
 USER claude-ci
