@@ -28,6 +28,8 @@ import json
 import os
 import re
 import sys
+import urllib.error
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 from artifact_utils import write_frontmatter
@@ -359,6 +361,12 @@ def fetch_strategy(strategy_key, output_dir="artifacts/strategies"):
         f.write(f"# {summary}\n\n")
         f.write(markdown)
 
+    # Inline any overflow markdown the description points at
+    _append_referenced_markdown(
+        server, user, token, strategy_key, markdown,
+        issue["fields"].get("attachment", []), path,
+    )
+
     # Download UX prototype attachments (HTML files) if UXD marker present
     _download_prototype_attachments(
         server, user, token, strategy_key, markdown,
@@ -366,6 +374,72 @@ def fetch_strategy(strategy_key, output_dir="artifacts/strategies"):
     )
 
     return path
+
+
+def _attachment_created(attachment):
+    """Parse an attachment's Jira timestamp; oldest-possible on failure."""
+    try:
+        return datetime.strptime(
+            attachment.get("created", ""), "%Y-%m-%dT%H:%M:%S.%f%z")
+    except (ValueError, TypeError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _newest_referenced_markdown(strategy_text, attachments):
+    """Pick the markdown attachments the description names, newest per name.
+
+    Jira keeps every upload, so a strategy revised three times leaves three
+    attachments called `KEY-strategy.md`. Only the newest is current.
+
+    Returns:
+        list of attachment dicts, ordered by filename.
+    """
+    newest = {}
+    for attachment in attachments:
+        name = attachment.get("filename", "")
+        if not name.lower().endswith(".md") or name not in strategy_text:
+            continue
+        if (name not in newest
+                or _attachment_created(attachment)
+                > _attachment_created(newest[name])):
+            newest[name] = attachment
+    return [newest[name] for name in sorted(newest)]
+
+
+def _append_referenced_markdown(server, user, token, strategy_key,
+                                strategy_text, attachments, path):
+    """Append the markdown attachments the strategy description references.
+
+    A strategy that outgrows Jira's description limit keeps a TL;DR in the
+    body and moves the rest to an attachment. Without this the spec generator
+    reads the TL;DR and a note saying the real strategy is elsewhere.
+
+    Only attachments named in the description are inlined, which is what
+    keeps reviewer artifacts out.
+    """
+    referenced = _newest_referenced_markdown(strategy_text, attachments)
+    if not referenced:
+        return
+
+    attach_dir = os.path.join(
+        os.path.dirname(path), "attachments", strategy_key)
+    os.makedirs(attach_dir, exist_ok=True)
+
+    for attachment in referenced:
+        name = attachment["filename"]
+        dest = os.path.join(attach_dir, name)
+        print(f"  Downloading strategy attachment: {name}")
+        try:
+            download_attachment(
+                server, user, token, attachment["content"], dest)
+            with open(dest, encoding="utf-8") as f:
+                body = f.read()
+        except (OSError, urllib.error.URLError) as exc:
+            print(f"  Warning: could not inline {name}: {exc}",
+                  file=sys.stderr)
+            continue
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n\n---\n\n# {name}\n\n{body}")
 
 
 def _download_prototype_attachments(server, user, token, strategy_key,

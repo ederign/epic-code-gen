@@ -329,6 +329,33 @@ FAKE_ADF = {
 }
 
 
+def _adf_text(text):
+    """A minimal ADF document wrapping a single paragraph."""
+    return {
+        "type": "doc", "version": 1,
+        "content": [{"type": "paragraph",
+                     "content": [{"type": "text", "text": text}]}],
+    }
+
+
+def _attachment(filename, created):
+    """A Jira attachment record. The URL encodes `created` so that a test can
+    assert which of several same-named uploads was fetched."""
+    return {
+        "filename": filename,
+        "created": created,
+        "content": f"https://jira.example.com/att/{filename}?created={created}",
+    }
+
+
+def _write_body(body):
+    """A download_attachment side effect that writes `body` to dest_path."""
+    def _download(server, user, token, content_url, dest_path):
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(body)
+    return _download
+
+
 class TestFetchStrategy:
 
     @patch("fetch_epic.get_issue")
@@ -380,6 +407,82 @@ class TestFetchStrategy:
         }
         result = fetch_strategy("RHAISTRAT-1749", output_dir=str(tmp_path))
         assert result is None
+
+    @patch("fetch_epic.download_attachment")
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_inlines_newest_referenced_markdown_attachment(
+            self, mock_env, mock_get, mock_download, tmp_path):
+        """RHAISTRAT-2565 carried three `-strategy.md` uploads plus an
+        unreferenced `-review.md`; only the newest strategy belongs inline."""
+        mock_get.return_value = {
+            "fields": {
+                "summary": "Title",
+                "description": _adf_text(
+                    "Stored as an attachment: `KEY-strategy.md`."),
+                "attachment": [
+                    _attachment("KEY-strategy.md",
+                                "2026-08-14T19:29:31.302+0000"),
+                    _attachment("KEY-strategy.md",
+                                "2026-08-14T21:13:49.731+0000"),
+                    _attachment("KEY-strategy.md",
+                                "2026-08-14T19:58:43.580+0000"),
+                    _attachment("KEY-review.md",
+                                "2026-08-14T21:14:13.272+0000"),
+                ],
+            }
+        }
+        mock_download.side_effect = _write_body("the full strategy")
+
+        path = fetch_strategy("KEY", output_dir=str(tmp_path))
+
+        urls = [call.args[3] for call in mock_download.call_args_list]
+        assert urls == ["https://jira.example.com/att/KEY-strategy.md"
+                        "?created=2026-08-14T21:13:49.731+0000"]
+        content = open(path).read()
+        assert "# KEY-strategy.md" in content
+        assert "the full strategy" in content
+
+    @patch("fetch_epic.download_attachment")
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_skips_attachments_the_description_never_names(
+            self, mock_env, mock_get, mock_download, tmp_path):
+        mock_get.return_value = {
+            "fields": {
+                "summary": "Title",
+                "description": _adf_text("No attachments mentioned here."),
+                "attachment": [
+                    _attachment("KEY-review.md",
+                                "2026-08-14T21:14:13.272+0000"),
+                ],
+            }
+        }
+        fetch_strategy("KEY", output_dir=str(tmp_path))
+        mock_download.assert_not_called()
+
+    @patch("fetch_epic.download_attachment",
+           side_effect=OSError("connection reset"))
+    @patch("fetch_epic.get_issue")
+    @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
+                                                    "user", "token"))
+    def test_failed_attachment_download_still_writes_strategy(
+            self, mock_env, mock_get, mock_download, tmp_path):
+        mock_get.return_value = {
+            "fields": {
+                "summary": "Title",
+                "description": _adf_text("See `KEY-strategy.md`."),
+                "attachment": [
+                    _attachment("KEY-strategy.md",
+                                "2026-08-14T21:13:49.731+0000"),
+                ],
+            }
+        }
+        path = fetch_strategy("KEY", output_dir=str(tmp_path))
+        assert path is not None
+        assert "# Title" in open(path).read()
 
     @patch("fetch_epic.get_issue")
     @patch("fetch_epic.require_env", return_value=("https://jira.example.com",
