@@ -16,5 +16,8 @@
   },
   "ederign/kale": {
     "keywords": ["kale", "kale extension", "kale jupyterlab", "sample notebook catalog", "kale pipeline"]
+  },
+  "ederign/openc-ui-by-agentic-sdlc": {
+    "keywords": ["openc-ui", "openc-ui-by-agentic-sdlc", "openclaw", "openshell", "conversation-ui", "conversation surface", "gateway client", "gateway-client"]
   }
 }

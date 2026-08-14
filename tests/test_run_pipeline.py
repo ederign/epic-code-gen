@@ -688,6 +688,16 @@ class TestLoadRepoMapping:
         result = load_repo_mapping(str(tmp_path / "nonexistent.json"))
         assert result == {}
 
+    def test_shipped_mapping_covers_openc_ui(self):
+        mapping = load_repo_mapping()
+        assert "ederign/openc-ui-by-agentic-sdlc" in mapping
+
+    def test_shipped_mapping_keywords_are_lists_of_strings(self):
+        for repo, config in load_repo_mapping().items():
+            keywords = config.get("keywords")
+            assert isinstance(keywords, list) and keywords, repo
+            assert all(isinstance(kw, str) and kw for kw in keywords), repo
+
 
 # ─── TestResolveTargetRepo ───────────────────────────────────────────────────
 
@@ -719,6 +729,15 @@ class TestResolveTargetRepo:
         epic = _epic("RHAI-1", title="Dashboard work")
         result = resolve_target_repo(epic, {})
         assert result == ""
+
+    @pytest.mark.parametrize("title", [
+        "Gateway Client Integration and Connection Management",
+        "Conversation Surface with Streamed Rendering",
+    ])
+    def test_openc_ui_epic_titles_match_shipped_keywords(self, title):
+        repo = "ederign/openc-ui-by-agentic-sdlc"
+        mapping = {repo: load_repo_mapping()[repo]}
+        assert resolve_target_repo(_epic("RHAI-1", title=title), mapping) == repo
 
     @mock.patch("run_pipeline.resolve_repo_via_llm", return_value="")
     def test_no_match_calls_llm(self, mock_llm):
