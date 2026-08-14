@@ -688,6 +688,23 @@ class TestLoadRepoMapping:
         result = load_repo_mapping(str(tmp_path / "nonexistent.json"))
         assert result == {}
 
+    def test_shipped_mapping_covers_openc_ui(self):
+        mapping = load_repo_mapping()
+        assert "ederign/openc-ui-by-agentic-sdlc" in mapping
+
+    def test_shipped_mapping_keywords_are_lists_of_strings(self):
+        for repo, config in load_repo_mapping().items():
+            keywords = config.get("keywords")
+            assert isinstance(keywords, list) and keywords, repo
+            assert all(isinstance(kw, str) and kw for kw in keywords), repo
+
+    def test_shipped_keywords_are_too_long_to_match_mid_word(self):
+        """Matching is bare substring, so short keywords hit inside unrelated
+        words -- "ui" matched "requires", sending every epic to the LLM."""
+        for repo, config in load_repo_mapping().items():
+            for keyword in config["keywords"]:
+                assert len(keyword) >= 4, f"{repo}: {keyword!r} is too short"
+
 
 # ─── TestResolveTargetRepo ───────────────────────────────────────────────────
 
@@ -719,6 +736,21 @@ class TestResolveTargetRepo:
         epic = _epic("RHAI-1", title="Dashboard work")
         result = resolve_target_repo(epic, {})
         assert result == ""
+
+    @pytest.mark.parametrize("title", [
+        "Gateway Client Integration and Connection Management",
+        "Conversation Surface with Streamed Rendering",
+    ])
+    def test_openc_ui_epics_resolve_without_llm_fallback(self, title):
+        """RHAI-543/544. A second match would defer to the LLM, so this only
+        holds while no other repo's keywords collide."""
+        epic = _epic("RHAI-1", title=title)
+        epic["body"] = (
+            "Implement this in the openc-ui-by-agentic-sdlc repository, "
+            "which requires a PatternFly 6 UI built on React 19."
+        )
+        result = resolve_target_repo(epic, load_repo_mapping())
+        assert result == "ederign/openc-ui-by-agentic-sdlc"
 
     @mock.patch("run_pipeline.resolve_repo_via_llm", return_value="")
     def test_no_match_calls_llm(self, mock_llm):

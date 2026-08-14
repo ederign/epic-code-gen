@@ -1,6 +1,6 @@
 {
   "opendatahub-io/odh-dashboard": {
-    "keywords": ["dashboard", "frontend", "patternfly", "ui", "gen-ai-ui", "gen ai studio", "automl-ui", "AI Core Dashboard"]
+    "keywords": ["odh-dashboard", "odh dashboard", "dashboard", "frontend", "gen-ai-ui", "gen ai studio", "automl-ui", "AI Core Dashboard"]
   },
   "opendatahub-io/pipelines-components": {
     "keywords": ["pipelines-components", "pipeline components", "autogluon", "automl", "data_loader", "tabular_data_loader", "timeseries_data_loader", "leaderboard_evaluation"]
@@ -16,5 +16,8 @@
   },
   "ederign/kale": {
     "keywords": ["kale", "kale extension", "kale jupyterlab", "sample notebook catalog", "kale pipeline"]
+  },
+  "ederign/openc-ui-by-agentic-sdlc": {
+    "keywords": ["openc-ui", "openc-ui-by-agentic-sdlc", "openclaw", "openshell", "conversation-ui", "conversation surface", "gateway client", "gateway-client"]
   }
 }
