@@ -1,6 +1,6 @@
 {
   "opendatahub-io/odh-dashboard": {
-    "keywords": ["dashboard", "frontend", "patternfly", "ui", "gen-ai-ui", "gen ai studio", "automl-ui", "AI Core Dashboard"]
+    "keywords": ["odh-dashboard", "odh dashboard", "dashboard", "frontend", "gen-ai-ui", "gen ai studio", "automl-ui", "AI Core Dashboard"]
   },
   "opendatahub-io/pipelines-components": {
     "keywords": ["pipelines-components", "pipeline components", "autogluon", "automl", "data_loader", "tabular_data_loader", "timeseries_data_loader", "leaderboard_evaluation"]
