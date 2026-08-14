@@ -1153,6 +1153,17 @@ def ci_process_epic(epic, state, args, server, user, token):
     if has_skip_label(epic):
         return SKIPPED, current, current, f"Skipped ({SKIP_LABEL})"
 
+    # Jira is the authority on whether the work is finished. Without this the
+    # CI machine only ever read its own state file, so an epic closed in Jira
+    # -- by hand, or because it was an investigation nobody meant to code --
+    # was classified Ready and generated on the next run. Recording Done
+    # rather than skipping is the point: a dependent's dependency check reads
+    # this file, so a bare skip left every dependent Blocked forever.
+    if epic.get("jira_status") in DONE_STATUSES and current != "Done":
+        state["status"] = "Done"
+        save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
+        return SKIPPED, current, "Done", "Already done in Jira"
+
     if current in CI_TERMINAL_STATES:
         return SKIPPED, current, current, f"Terminal state: {current}"
 

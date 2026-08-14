@@ -118,6 +118,61 @@ class TestCIStateMachine:
         assert action == PROCESSED
         assert to_s == "Ready"
 
+    @pytest.mark.parametrize("jira_status", ["Done", "Closed", "Resolved"])
+    def test_epic_done_in_jira_is_recorded_done_not_generated(
+            self, jira_status, tmp_path):
+        """RHAI-542 was Closed in Jira and still classified Ready, so the
+        next run would have generated code for a finished epic."""
+        epic = _epic("RHAI-1", jira_status=jira_status)
+        args = _args(tmp_path)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, None, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert to_s == "Done"
+        assert detail == "Already done in Jira"
+        state = load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-1")
+        assert state["status"] == "Done"
+
+    def test_epic_already_ready_is_pulled_back_when_jira_says_done(
+            self, tmp_path):
+        """The state RHAI-542 is actually in: misclassified Ready by an
+        earlier run, so the fix has to correct it, not merely prevent it."""
+        epic = _epic("RHAI-1", jira_status="Closed")
+        args = _args(tmp_path)
+
+        action, from_s, to_s, _ = ci_process_epic(
+            epic, {"status": "Ready"}, args, "srv", "usr", "tok")
+
+        assert action == SKIPPED
+        assert (from_s, to_s) == ("Ready", "Done")
+
+    def test_dependent_unblocks_once_its_dep_is_done_in_jira(self, tmp_path):
+        """The RHAI-542 -> RHAI-543 case. Recording Done rather than merely
+        skipping is what lets the dependent's dep check pass; a bare skip
+        left it Blocked forever."""
+        args = _args(tmp_path)
+        ci_process_epic(_epic("RHAI-1", jira_status="Closed"), None,
+                        args, "srv", "usr", "tok")
+
+        action, _, to_s, detail = ci_process_epic(
+            _epic("RHAI-2", deps=["RHAI-1"]), None, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "Ready"
+        assert detail == "Classified as ready"
+
+    def test_open_epic_is_untouched_by_the_jira_done_check(self, tmp_path):
+        epic = _epic("RHAI-1", jira_status="In Progress")
+        args = _args(tmp_path)
+
+        action, _, to_s, _ = ci_process_epic(
+            epic, None, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "Ready"
+
     def test_done_epic_is_skipped(self, tmp_path):
         epic = _epic("RHAI-1")
         state = {"status": "Done", "current_version": 2}
