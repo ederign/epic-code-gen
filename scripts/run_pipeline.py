@@ -1323,6 +1323,26 @@ def _ci_handle_ready(epic, state, args, server, user, token):
         return FAILED, "Ready", "Failed", "codegen failed"
 
 
+def _pr_is_live(pr_url):
+    """Whether this PR still governs the epic — open, or already merged.
+
+    A PR closed without merging does not: that epic has to generate again,
+    and the scoring path is what opens its replacement. Unknown counts as
+    not live (no token, GitHub unreachable, an unparseable URL), which
+    leaves the scoring path in charge exactly as it was before this check.
+    """
+    gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+    if not gh_token:
+        return False
+    try:
+        from pr_lifecycle import get_pr_status
+        status = get_pr_status(pr_url, gh_token)
+    except Exception as e:
+        log.warning("Could not read PR status for %s: %s", pr_url, e)
+        return False
+    return bool(status.get("merged")) or status.get("state") == "open"
+
+
 def _ci_handle_review_pending(epic, state, args, server, user, token):
     """Score the review and decide: create PR or iterate."""
     epic_id = epic["epic_id"]
@@ -1360,6 +1380,19 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
         for d in ("architecture", "tests", "lint", "intent"))
     log.info("%s v%d scores: avg=%.1f verdict=%s (%s)",
              epic_id, version, avg, verdict, dim_detail)
+
+    # A live PR outranks every score below. The /epic-codegen skill opens one
+    # itself when its own iteration plateaus under 8.0, and each of the three
+    # decisions that follow then does the wrong thing with it: open a
+    # duplicate, mark a reviewed epic Failed, or -- what happened to RHAI-543
+    # at 7.7 with iterations left -- write Ready back, so the next run
+    # regenerated from base and force-pushed over the branch a reviewer was
+    # reading. Delegated rather than assumed to be PRCreated, because the PR
+    # may have merged since.
+    if state.get("pr_url") and _pr_is_live(state["pr_url"]):
+        action, _, to_state, detail = _ci_handle_pr_created(
+            epic, state, args, server, user, token)
+        return action, "ReviewPending", to_state, detail
 
     if avg >= 8.0 and dims_ok:
         pr_url = _create_pr_for_epic(epic, state, args)
