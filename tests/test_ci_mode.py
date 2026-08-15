@@ -51,6 +51,24 @@ def _args(data_repo, dry_run=False, no_strategy=False):
     )
 
 
+def _write_scores(tmp_path, args, epic_id, version, avg, verdict, dim=7.0):
+    """Put a scores.json where _ci_handle_review_pending will find it."""
+    args.output_dir = str(tmp_path / "out")
+    scores_dir = tmp_path / "out" / "codegen-runs" / epic_id / f"v{version}"
+    scores_dir.mkdir(parents=True, exist_ok=True)
+    (scores_dir / "scores.json").write_text(json.dumps({
+        "weighted_average": avg,
+        "verdict": verdict,
+        "dimensions": {d: {"score": dim}
+                       for d in ("architecture", "tests", "lint", "intent")},
+    }))
+
+
+def _never_called_pr(epic, state, args):
+    raise AssertionError(
+        "_create_pr_for_epic must not run while a PR is already live")
+
+
 class TestLoadSaveState:
 
     def test_save_and_load(self, tmp_path):
@@ -329,6 +347,127 @@ class TestCIStateMachine:
 
         os.remove(os.path.join(scores_dir, "scores.json"))
         os.removedirs(scores_dir)
+
+    def test_review_pending_defers_to_an_open_pr_instead_of_iterating(
+            self, tmp_path, monkeypatch):
+        """RHAI-543. The skill opens its own PR when its iteration plateaus
+        below 8.0, and scoring that version again sent the epic back to
+        Ready -- regenerating from base over the branch under review."""
+        import pr_lifecycle
+        import run_pipeline
+
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "tok")
+        monkeypatch.setattr(pr_lifecycle, "get_pr_status",
+                            lambda url, token: {"merged": False,
+                                                "state": "open"})
+        monkeypatch.setattr(pr_lifecycle, "derive_pr_state",
+                            lambda s: "PRCreated")
+        monkeypatch.setattr(pr_lifecycle, "get_pr_reviews",
+                            lambda url, token: {"comments": [],
+                                                "reviews": []})
+        monkeypatch.setattr(pr_lifecycle, "load_processed_comment_ids",
+                            lambda path: set())
+        monkeypatch.setattr(run_pipeline, "_create_pr_for_epic",
+                            _never_called_pr)
+
+        epic = _epic("RHAI-1")
+        state = {"status": "ReviewPending", "current_version": 7,
+                 "max_iterations": 10,
+                 "pr_url": "https://github.com/org/repo/pull/2"}
+        args = _args(tmp_path)
+        _write_scores(tmp_path, args, "RHAI-1", 7, 7.7, "near-miss")
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert from_s == "ReviewPending"
+        assert to_s == "PRCreated"
+        assert load_epic_state(
+            tmp_path, "RHAISTRAT-1", "RHAI-1")["status"] == "PRCreated"
+
+    def test_review_pending_routes_an_open_pr_with_comments_to_response(
+            self, tmp_path, monkeypatch):
+        import pr_lifecycle
+        import run_pipeline
+
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "tok")
+        monkeypatch.setattr(pr_lifecycle, "get_pr_status",
+                            lambda url, token: {"merged": False,
+                                                "state": "open"})
+        monkeypatch.setattr(pr_lifecycle, "derive_pr_state",
+                            lambda s: "PRChangesRequested")
+        monkeypatch.setattr(run_pipeline, "_create_pr_for_epic",
+                            _never_called_pr)
+        monkeypatch.setattr(
+            run_pipeline, "_ci_handle_pr_changes",
+            lambda *a, **k: (PROCESSED, "PRChangesRequested", "PRCreated",
+                             "review response"))
+
+        epic = _epic("RHAI-1")
+        state = {"status": "ReviewPending", "current_version": 7,
+                 "max_iterations": 10,
+                 "pr_url": "https://github.com/org/repo/pull/2"}
+        args = _args(tmp_path)
+        _write_scores(tmp_path, args, "RHAI-1", 7, 7.7, "near-miss")
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert detail == "review response"
+
+    def test_review_pending_lets_a_good_score_replace_a_closed_pr(
+            self, tmp_path, monkeypatch):
+        """A PR closed without merging no longer governs, so the epic must
+        still be able to open a replacement."""
+        import pr_lifecycle
+        import run_pipeline
+
+        monkeypatch.setenv("EPIC_CODEGEN_GITHUB_TOKEN", "tok")
+        monkeypatch.setattr(pr_lifecycle, "get_pr_status",
+                            lambda url, token: {"merged": False,
+                                                "state": "closed"})
+        monkeypatch.setattr(run_pipeline, "transition_issue",
+                            lambda *a, **k: (True, "Review"))
+        monkeypatch.setattr(run_pipeline, "link_pr_to_jira",
+                            lambda *a, **k: None)
+        created = []
+        monkeypatch.setattr(
+            run_pipeline, "_create_pr_for_epic",
+            lambda ep, st, ar: created.append(ep["epic_id"])
+            or "https://github.com/org/repo/pull/3")
+
+        epic = _epic("RHAI-1")
+        state = {"status": "ReviewPending", "current_version": 2,
+                 "max_iterations": 10,
+                 "pr_url": "https://github.com/org/repo/pull/2"}
+        args = _args(tmp_path)
+        _write_scores(tmp_path, args, "RHAI-1", 2, 9.0, "pass", dim=9.0)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert to_s == "PRCreated"
+        assert created == ["RHAI-1"]
+
+    def test_review_pending_scores_normally_without_a_github_token(
+            self, tmp_path, monkeypatch):
+        """No token means the PR's state is unknowable, so the pre-existing
+        scoring behaviour has to stay in charge rather than stall."""
+        monkeypatch.delenv("EPIC_CODEGEN_GITHUB_TOKEN", raising=False)
+
+        epic = _epic("RHAI-1")
+        state = {"status": "ReviewPending", "current_version": 1,
+                 "max_iterations": 10,
+                 "pr_url": "https://github.com/org/repo/pull/2"}
+        args = _args(tmp_path)
+        _write_scores(tmp_path, args, "RHAI-1", 1, 5.0, "fail", dim=5.0)
+
+        action, from_s, to_s, detail = ci_process_epic(
+            epic, state, args, "srv", "usr", "tok")
+
+        assert action == PROCESSED
+        assert to_s == "Ready"
 
     def test_ready_dry_run_doesnt_invoke(self, tmp_path):
         epic = _epic("RHAI-1")
