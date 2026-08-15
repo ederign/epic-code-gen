@@ -87,7 +87,22 @@ Validate:
 - File exists and has valid frontmatter
 - `status` is `Pending` or `Ready` (not `InProgress` or later)
 - `target_repo` is set
-- If `dependencies` is non-empty, verify each dependency epic has `status=Validated`
+- If `dependencies` is non-empty, every dependency must be done in Jira:
+
+```bash
+python3 scripts/check_dependencies.py ${EPIC_ID}
+```
+
+Exit 0 means proceed; exit 1 names the dependencies that are not done, and
+this run stops there.
+
+Check `jira_status`, never the dependency's `status`. Every epic-task file is
+regenerated from Jira on each run with `status: Pending` hardcoded
+(`fetch_jira_epics.py`), so that field says `Pending` for a finished epic just
+as loudly as for an unstarted one. The gate this replaced read it and looked
+for `Validated`, a value nothing in the repo writes — unsatisfiable, so it
+passed only when a model talked itself past it (RHAI-543) and blocked the epic
+when one did not (RHAI-544).
 
 Read the epic-task body — this is your "interview transcript." The body
 contains what to build, acceptance criteria, target files, and reference
