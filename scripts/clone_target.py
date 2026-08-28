@@ -128,20 +128,10 @@ def clone(repo_url, epic_id, dest=None, fork_owner=None, clean=False,
 
 def _url_matches(url, remote_output):
     """Check if url matches any remote URL (handles https vs git@ variants)."""
-    slug = _extract_slug(url)
+    slug = github_utils.extract_slug(url)
     if slug:
         return slug in remote_output
     return False
-
-
-def _extract_slug(url):
-    """Extract org/repo from a GitHub URL."""
-    url = url.rstrip("/").rstrip(".git")
-    if "github.com" in url:
-        parts = url.split("github.com")[-1].strip("/:").split("/")
-        if len(parts) >= 2:
-            return f"{parts[0]}/{parts[1]}"
-    return None
 
 
 def _configure_git_identity(dest, token):
@@ -263,7 +253,7 @@ def _setup_fork_remote(dest, upstream_url, fork_owner, token=None):
 
     Returns dict with: fork_url (display URL), fork_created.
     """
-    slug = _extract_slug(upstream_url)
+    slug = github_utils.extract_slug(upstream_url)
     if not slug:
         return {"fork_url": None, "fork_created": False}
 

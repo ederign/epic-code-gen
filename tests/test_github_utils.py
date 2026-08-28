@@ -41,6 +41,16 @@ class TestExtractSlug:
     def test_no_repo(self):
         assert extract_slug("https://github.com/org") is None
 
+    def test_repo_name_ending_in_git_suffix_chars(self):
+        """`.git` must be stripped as a suffix, not as a character set.
+
+        rstrip(".git") eats any trailing '.', 'g', 'i' or 't', which turned
+        rh-forge-ui into rh-forge-u and 404'd every fork API call.
+        """
+        for name in ("rh-forge-ui", "some-widget", "config", "kubeflow-training"):
+            url = f"https://github.com/org/{name}.git"
+            assert extract_slug(url) == f"org/{name}"
+
     def test_empty_string(self):
         assert extract_slug("") is None
 
