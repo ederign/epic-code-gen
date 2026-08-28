@@ -2,8 +2,9 @@
 id: bug-preflight-blind-to-pnpm
 title: Toolchain preflight was blind to pnpm
 type: bug
-status: open
+status: fixed
 repos: [epic-code-gen]
+commits: ["cf130f7"]
 decisions: [ADR-0025]
 ---
 
@@ -44,8 +45,6 @@ High — silently converts a missing-tool fault into a low dimension score on a 
 same class of failure as the missing `uv` that produced `lint=5.0` ([[task-toolchain-preflight]]).
 
 ## Fix
-
-Written, not yet committed — move to `fixed/` with the SHA once it lands.
 
 `detect_package_manager(repo_path)` is now the single answer to "which manager does this repo want":
 the `packageManager` field first (the repo's own statement of record, so a stale lockfile does not
