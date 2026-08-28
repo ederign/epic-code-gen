@@ -20,7 +20,9 @@ from validate_target import (
     _parse_makefile_rules,
     _parse_makefile_vars,
     _tools_in_recipe_line,
+    detect_package_manager,
     detect_required_tools,
+    discover_commands,
     preflight,
     run_check,
     tools_for_target,
@@ -221,6 +223,28 @@ class TestDetectRequiredTools:
             yarn__lock="")
         assert "yarn" in detect_required_tools(repo, "javascript")
 
+    def test_pnpm_required_when_lockfile_present(self, tmp_path):
+        """The blind spot that let rh-forge-ui preflight clean with no pnpm."""
+        repo = self._write(
+            tmp_path, package__json='{"scripts":{"lint":"eslint ."}}')
+        (tmp_path / "pnpm-lock.yaml").write_text("")
+        assert "pnpm" in detect_required_tools(repo, "typescript")
+
+    def test_pnpm_required_when_declared_in_package_json(self, tmp_path):
+        repo = self._write(
+            tmp_path,
+            package__json='{"packageManager":"pnpm@10.32.1",'
+                          '"scripts":{"lint":"eslint ."}}')
+        assert "pnpm" in detect_required_tools(repo, "typescript")
+
+    def test_plain_npm_repo_gates_on_nothing_extra(self, tmp_path):
+        repo = self._write(
+            tmp_path, package__json='{"scripts":{"lint":"eslint ."}}')
+        (tmp_path / "package-lock.json").write_text("{}")
+        tools = detect_required_tools(repo, "javascript")
+        assert "pnpm" not in tools
+        assert "yarn" not in tools
+
     def test_no_makefile_still_returns_base_tools(self, tmp_path):
         repo = self._write(tmp_path, go__mod="module x\n")
         tools = detect_required_tools(repo, "go")
@@ -249,6 +273,88 @@ class TestDetectRequiredTools:
             pyproject__toml="[project]\nname='x'\n")
         tools = detect_required_tools(repo, "python")
         assert len(tools) == len(set(tools))
+
+
+class TestDetectPackageManager:
+
+    def _write(self, tmp_path, **files):
+        for name, content in files.items():
+            (tmp_path / name.replace("__", ".")).write_text(content)
+        return str(tmp_path)
+
+    def test_defaults_to_npm(self, tmp_path):
+        repo = self._write(tmp_path, package__json='{"name":"x"}')
+        assert detect_package_manager(repo) == "npm"
+
+    @pytest.mark.parametrize("lockfile,expected", [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+    ])
+    def test_lockfile_implies_manager(self, tmp_path, lockfile, expected):
+        (tmp_path / "package.json").write_text('{"name":"x"}')
+        (tmp_path / lockfile).write_text("")
+        assert detect_package_manager(str(tmp_path)) == expected
+
+    def test_declaration_wins_over_stale_lockfile(self, tmp_path):
+        """`packageManager` is the repo's own statement of record."""
+        repo = self._write(
+            tmp_path,
+            package__json='{"packageManager":"pnpm@10.32.1"}',
+            yarn__lock="")
+        assert detect_package_manager(repo) == "pnpm"
+
+    def test_unknown_declaration_falls_back_to_lockfile(self, tmp_path):
+        repo = self._write(
+            tmp_path, package__json='{"packageManager":"bun@1.0.0"}')
+        (tmp_path / "pnpm-lock.yaml").write_text("")
+        assert detect_package_manager(repo) == "pnpm"
+
+    def test_unreadable_package_json_does_not_raise(self, tmp_path):
+        repo = self._write(tmp_path, package__json="{not json")
+        assert detect_package_manager(repo) == "npm"
+
+    def test_missing_package_json_defaults_to_npm(self, tmp_path):
+        assert detect_package_manager(str(tmp_path)) == "npm"
+
+
+class TestDiscoverCommandsPackageManager:
+    """Scripts must run through the manager the repo declares.
+
+    A pnpm workspace installed and driven by npm resolves a different
+    dependency tree than the repo's own CI, so the checks would not be
+    measuring the same thing — and `npm run lint` in a pnpm-only repo
+    exits non-zero for reasons that have nothing to do with the code.
+    """
+
+    def _js_repo(self, tmp_path, manager_file, scripts):
+        (tmp_path / "package.json").write_text(
+            json.dumps({"scripts": scripts}))
+        if manager_file:
+            (tmp_path / manager_file).write_text("")
+        return str(tmp_path)
+
+    def test_pnpm_repo_gets_pnpm_commands(self, tmp_path):
+        repo = self._js_repo(
+            tmp_path, "pnpm-lock.yaml",
+            {"lint": "eslint .", "test": "vitest run"})
+        cmds = discover_commands(repo, "typescript")
+        assert cmds["lint"] == "pnpm run lint"
+        assert cmds["test"] == "pnpm test"
+
+    def test_pnpm_typecheck_runs_through_pnpm(self, tmp_path):
+        repo = self._js_repo(
+            tmp_path, "pnpm-lock.yaml", {"typecheck": "tsc --noEmit"})
+        assert discover_commands(repo, "typescript")["typecheck"] == (
+            "pnpm run typecheck")
+
+    def test_npm_repo_still_gets_npm_commands(self, tmp_path):
+        repo = self._js_repo(tmp_path, None, {"lint": "eslint ."})
+        assert discover_commands(repo, "typescript")["lint"] == "npm run lint"
+
+    def test_makefile_target_used_when_no_matching_script(self, tmp_path):
+        repo = self._js_repo(tmp_path, "pnpm-lock.yaml", {"build": "vite build"})
+        (tmp_path / "Makefile").write_text("lint:\n\tpnpm lint\n")
+        assert discover_commands(repo, "typescript")["lint"] == "make lint"
 
 
 class TestPreflight:

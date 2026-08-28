@@ -1,0 +1,71 @@
+# The first CI this repo has had. See ADR-0034, and
+# docs/bugs/open/bug-repo-does-not-meet-own-standards.md — a repo whose purpose
+# is enforcing lint and tests on other repos had neither for itself.
+name: tests and ledger
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run unit tests
+        run: make test-unit
+
+  ledger:
+    name: ledger consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base commit to diff against for the companion check.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      # Blocking: the ledger must be internally consistent. A broken link or a
+      # status that disagrees with its directory is a real defect.
+      - name: Validate the ledger
+        run: python3 scripts/check_ledger.py --all
+
+      # Advisory for now: warns when a code change has no task/bug/ADR
+      # companion. Flipping this to blocking is its own task —
+      # docs/tasks/pending/task-make-ledger-check-blocking.md
+      - name: PR companion check (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s' "$PR_BODY" > /tmp/pr-body.txt
+          python3 scripts/check_ledger.py \
+            --diff "${BASE_SHA}..${HEAD_SHA}" \
+            --body /tmp/pr-body.txt

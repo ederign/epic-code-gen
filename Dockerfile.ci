@@ -33,11 +33,27 @@ RUN curl -fsSL "https://go.dev/dl/go1.24.4.linux-${TARGETARCH}.tar.gz" | tar -C 
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/home/claude-ci/go"
 
-# Node.js 22 (required by odh-dashboard: engines.node >= 22)
-RUN curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - \
+# Node.js 26 — the highest floor any target sets, so one runtime serves all.
+# odh-dashboard needs >= 22; rh-forge-ui needs ^24.15.0 || >= 26 AND sets
+# engine-strict=true in .npmrc, which turns a too-old Node from a warning into
+# a failed install. Was 22, which satisfied the first and hard-failed the
+# second.
+RUN curl -fsSL https://rpm.nodesource.com/setup_26.x | bash - \
     && dnf install -y --nodocs nodejs \
     && dnf clean all \
     && npm install -g yarn markdownlint-cli
+
+# pnpm, via the corepack shim Node ships, so a repo pinning
+# `packageManager: pnpm@x.y.z` gets that exact version rather than whatever
+# was current at image build time. A pnpm-workspace repo installed with npm
+# resolves a different dependency tree than its CI has.
+# `corepack enable pnpm`, not a bare `corepack enable`: the latter also
+# installs a yarn shim that shadows the yarn npm just put on PATH, which
+# odh-dashboard depends on.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable pnpm \
+    && corepack prepare pnpm@latest --activate \
+    && pnpm --version
 
 # JS/TS check tooling. `npm run lint` prepends the repo's node_modules/.bin,
 # so a repo that pins its own eslint/tsc/vitest still gets that one; these are
@@ -96,6 +112,8 @@ RUN python3 --version \
     && go version \
     && node --version \
     && npm --version \
+    && pnpm --version \
+    && yarn --version \
     && eslint --version \
     && tsc --version \
     && vitest --version \

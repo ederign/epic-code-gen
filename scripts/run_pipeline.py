@@ -240,6 +240,79 @@ def load_repo_mapping(path=None):
         return json.load(f)
 
 
+DEFAULT_TOKEN_VAR = "EPIC_CODEGEN_GITHUB_TOKEN"
+
+
+def load_our_user(config_path=None):
+    """Read the default bot username from review_config.json."""
+    if config_path is None:
+        config_path = os.path.join(_CONFIG_DIR, "review_config.json")
+    our_user = "dora-the-ai-coder"
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as f:
+            our_user = json.load(f).get("our_user", our_user)
+    return our_user
+
+
+def identity_for_repo(target_repo, args=None, mapping=None):
+    """Resolve the GitHub identity the pipeline acts under for one target repo.
+
+    Almost every target is another team's public repo, so the shared
+    `dora-the-ai-coder` bot forks it and opens the PR (ADR-0030). That breaks
+    down for a private repo in an org the bot is not a member of: the clone
+    404s and the epic looks like a mapping fault rather than a credential one.
+
+    A mapping entry may therefore carry its own `fork_owner` and
+    `gh_token_var`, so one target can run under a different credential without
+    changing the default for every other strategy in the same run.
+
+    `our_user` is what filters our own PR comments out of the review loop, so
+    it must name whoever the token belongs to — an override that changed the
+    fork owner but not this would make the pipeline answer its own comments
+    forever. It follows `fork_owner` unless set explicitly.
+
+    Returns:
+        dict: {"fork_owner", "gh_token_var", "our_user"}
+    """
+    default_owner = getattr(args, "fork_owner", None)
+    identity = {
+        "fork_owner": default_owner,
+        "gh_token_var": DEFAULT_TOKEN_VAR,
+        "our_user": load_our_user(),
+    }
+    if not target_repo:
+        return identity
+
+    if mapping is None:
+        mapping = load_repo_mapping()
+    entry = mapping.get(_repo_slug(target_repo)) or {}
+    if not entry:
+        return identity
+
+    if entry.get("fork_owner"):
+        identity["fork_owner"] = entry["fork_owner"]
+        # Follows fork_owner, not the shared default, unless overridden below.
+        identity["our_user"] = entry["fork_owner"]
+    if entry.get("gh_token_var"):
+        identity["gh_token_var"] = entry["gh_token_var"]
+    if entry.get("our_user"):
+        identity["our_user"] = entry["our_user"]
+    return identity
+
+
+def _repo_slug(target_repo):
+    """Normalise `owner/repo` out of a slug or a full clone URL."""
+    slug = (target_repo or "").strip()
+    slug = re.sub(r"^(https?://|git@)[^/:]+[/:]", "", slug)
+    return slug.removesuffix(".git").strip("/")
+
+
+def repo_token(target_repo, args=None, mapping=None):
+    """Return the GitHub token for a target repo, or "" if its var is unset."""
+    identity = identity_for_repo(target_repo, args, mapping)
+    return os.environ.get(identity["gh_token_var"], "")
+
+
 def resolve_target_repo(epic_data, mapping, prompt_path=None):
     """Determine the target repo for an epic.
 
@@ -376,9 +449,10 @@ def setup_target_repo(epic, args):
         sys.executable, os.path.join(_SCRIPT_DIR, "clone_target.py"),
         target_repo, epic_id, "--clean",
     ]
-    if args.fork_owner:
-        clone_cmd += ["--fork-owner", args.fork_owner,
-                      "--gh-token-var", "EPIC_CODEGEN_GITHUB_TOKEN"]
+    identity = identity_for_repo(target_repo, args)
+    if identity["fork_owner"]:
+        clone_cmd += ["--fork-owner", identity["fork_owner"],
+                      "--gh-token-var", identity["gh_token_var"]]
 
     try:
         result = subprocess.run(
@@ -502,8 +576,14 @@ def _install_node_deps(repo):
                 print(f"  Node {current} < {required_major}, "
                       f"using nvm to install {required_major}")
 
-    cmd = f"{nvm_prefix}npm install"
-    _run_cmd(["bash", "-c", cmd], cwd=repo, label="npm install")
+    # Install through the manager the repo declares. Installing a pnpm
+    # workspace with npm produces a different dependency tree than CI has,
+    # so the checks would not be measuring the same thing.
+    from validate_target import detect_package_manager
+    pkg_manager = detect_package_manager(repo)
+
+    cmd = f"{nvm_prefix}{pkg_manager} install"
+    _run_cmd(["bash", "-c", cmd], cwd=repo, label=f"{pkg_manager} install")
 
 
 def _get_node_major():
@@ -579,13 +659,18 @@ def _parse_flat_yaml(lines):
     return data
 
 
-def invoke_codegen(epic_id, args):
+def invoke_codegen(epic_id, args, target_repo=None):
     """Shell out to Claude for codegen. Returns True on success."""
     skill_args = f"/epic-codegen {epic_id}"
     if args.max_iterations is not None:
         skill_args += f" --max-iterations {args.max_iterations}"
-    if args.fork_owner:
-        skill_args += f" --fork-owner {args.fork_owner}"
+    identity = identity_for_repo(target_repo, args)
+    if identity["fork_owner"]:
+        skill_args += f" --fork-owner {identity['fork_owner']}"
+        # The skill defaults to EPIC_CODEGEN_GITHUB_TOKEN; a target with its
+        # own credential has to say so or the skill pushes to the fork with
+        # the wrong account's token.
+        skill_args += f" --gh-token-var {identity['gh_token_var']}"
 
     run_script = args.run_script or os.path.join(
         os.path.dirname(_SCRIPT_DIR), "ci-scripts", "run-claude.sh")
@@ -802,7 +887,8 @@ def process_strategy(strategy_key, server, user, token, args):
 
         original_status = all_epics_by_key[epic_id].get("jira_status", "")
 
-        success = invoke_codegen(epic_id, args)
+        success = invoke_codegen(
+            epic_id, args, all_epics_by_key[epic_id].get("target_repo"))
         if success:
             results[PROCESSED].append((epic_id, "codegen completed"))
             ok, _ = transition_issue(
@@ -1289,7 +1375,7 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
     log.info("%s: invoking codegen v%d", epic_id, state["current_version"])
-    success = invoke_codegen(epic_id, args)
+    success = invoke_codegen(epic_id, args, epic.get("target_repo"))
 
     # The codegen skill may iterate internally (v1→v2→...); sync version
     actual_version = _detect_highest_version(epic_id, args.output_dir)
@@ -1331,7 +1417,9 @@ def _pr_is_live(pr_url):
     not live (no token, GitHub unreachable, an unparseable URL), which
     leaves the scoring path in charge exactly as it was before this check.
     """
-    gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+    # The PR URL names its own repo, so the right credential is derivable
+    # without threading the epic down here.
+    gh_token = repo_token(pr_url.rsplit("/pull/", 1)[0])
     if not gh_token:
         return False
     try:
@@ -1463,9 +1551,11 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
             filter_unprocessed_reviews,
             load_processed_comment_ids,
         )
-        gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+        identity = identity_for_repo(epic.get("target_repo"), args)
+        gh_token = os.environ.get(identity["gh_token_var"], "")
         if not gh_token:
-            return SKIPPED, "PRCreated", "PRCreated", "No GitHub token"
+            return SKIPPED, "PRCreated", "PRCreated", \
+                f"No GitHub token in {identity['gh_token_var']}"
 
         status = get_pr_status(pr_url, gh_token)
         new_state = derive_pr_state(status)
@@ -1481,13 +1571,7 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
                     args.output_dir, "codegen-runs", epic_id,
                     "pr-replies.json")
             processed_ids = load_processed_comment_ids(pr_replies_path)
-            config_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..", "config", "review_config.json")
-            our_user = "dora-the-ai-coder"
-            if os.path.isfile(config_path):
-                with open(config_path) as f:
-                    our_user = json.load(f).get("our_user", our_user)
+            our_user = identity["our_user"]
             unprocessed = filter_unprocessed_comments(
                 reviews_data["comments"], processed_ids, our_user)
             # Review bodies count too — a reviewer can request changes with
@@ -1554,10 +1638,11 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         return FAILED, "PRChangesRequested", "Failed", \
             f"Exhausted {max_iter} iterations"
 
-    gh_token = os.environ.get("EPIC_CODEGEN_GITHUB_TOKEN", "")
+    identity = identity_for_repo(epic.get("target_repo"), args)
+    gh_token = os.environ.get(identity["gh_token_var"], "")
     if not gh_token:
         return SKIPPED, "PRChangesRequested", "PRChangesRequested", \
-            "No GitHub token"
+            f"No GitHub token in {identity['gh_token_var']}"
 
     next_version = version + 1
 
@@ -1583,8 +1668,12 @@ def _ci_handle_pr_changes(epic, state, args, server, user, token):
         "--output-dir", args.output_dir,
         "--target-repo", target_repo,
         "--version", str(next_version),
+        "--gh-token-var", identity["gh_token_var"],
+        "--our-user", identity["our_user"],
         "--json",
     ]
+    if identity["fork_owner"]:
+        cmd += ["--fork-owner", identity["fork_owner"]]
     base_branch = state.get("target_branch") or epic.get("target_branch")
     if base_branch:
         cmd += ["--base-branch", base_branch]
@@ -1710,10 +1799,10 @@ def _setup_target_for_review_response(epic, state, args, target_repo):
         sys.executable, clone_script, target_url, epic_id,
         "--dest", target_repo, "--checkout-existing", "--clean",
     ]
-    fork_owner = getattr(args, "fork_owner", None)
-    if fork_owner:
-        cmd += ["--fork-owner", fork_owner,
-                "--gh-token-var", "EPIC_CODEGEN_GITHUB_TOKEN"]
+    identity = identity_for_repo(target_url, args)
+    if identity["fork_owner"]:
+        cmd += ["--fork-owner", identity["fork_owner"],
+                "--gh-token-var", identity["gh_token_var"]]
 
     try:
         result = subprocess.run(
@@ -1775,6 +1864,8 @@ def _create_pr_for_epic(epic, state, args):
     if pr_url:
         return pr_url
 
+    identity = identity_for_repo(target_repo, args)
+
     try:
         from create_pr import create_pr
         from push_to_fork import push
@@ -1800,10 +1891,11 @@ def _create_pr_for_epic(epic, state, args):
 
         pr = create_pr(
             upstream_slug=target_repo,
-            fork_owner=args.fork_owner,
+            fork_owner=identity["fork_owner"],
             branch=branch,
             title=f"{epic_id}: {epic.get('title', 'Code generation')}",
             body=body,
+            token_var=identity["gh_token_var"],
         )
         return pr.get("html_url")
     except urllib.error.HTTPError as e:
@@ -1811,10 +1903,10 @@ def _create_pr_for_epic(epic, state, args):
                 e, "error_body", ""):
             import github_utils
             upstream_owner, upstream_repo = target_repo.split("/")
-            token = github_utils.require_env()
+            token = github_utils.require_env(identity["gh_token_var"])
             existing = github_utils.find_existing_pr(
                 upstream_owner, upstream_repo,
-                args.fork_owner, branch, token)
+                identity["fork_owner"], branch, token)
             if existing:
                 url = existing.get("html_url")
                 print(f"  {epic_id}: PR already exists: {url}")

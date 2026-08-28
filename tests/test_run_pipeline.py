@@ -22,6 +22,7 @@ from run_pipeline import (
     check_pr_merged,
     clean_artifacts,
     find_eligible,
+    identity_for_repo,
     link_pr_to_jira,
     load_pr_urls_from_logs,
     load_repo_mapping,
@@ -177,7 +178,7 @@ class TestProcessStrategy:
         assert results[PROCESSED][0][0] == "RHAI-1"
         assert len(results[BLOCKED]) == 1
         assert results[BLOCKED][0][0] == "RHAI-2"
-        mock_invoke.assert_called_once_with("RHAI-1", args)
+        mock_invoke.assert_called_once_with("RHAI-1", args, "")
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue", return_value=(True, ""))
@@ -394,6 +395,26 @@ class TestInvokeCodegen:
         cmd = mock_run.call_args[0][0]
         skill_arg = cmd[2]  # -p argument
         assert "--fork-owner dora-the-ai-coder" in skill_arg
+        assert "--gh-token-var EPIC_CODEGEN_GITHUB_TOKEN" in skill_arg
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_overridden_target_passes_its_own_identity(self, mock_run,
+                                                       tmp_path):
+        """The skill defaults to the shared bot's token var. A target with
+        its own credential has to override both halves or the skill pushes
+        to ederign's fork with dora's token."""
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        meta = tmp_path / "codegen-runs" / "RHAI-1"
+        meta.mkdir(parents=True)
+        (meta / "v1").mkdir()
+        (meta / "v1" / "diff.patch").write_text("diff --git a/f b/f\n")
+        args = _make_args(fork_owner="dora-the-ai-coder",
+                          output_dir=str(tmp_path))
+        invoke_codegen("RHAI-1", args, "rh-forge/rh-forge-ui")
+
+        skill_arg = mock_run.call_args[0][0][2]
+        assert "--fork-owner ederign" in skill_arg
+        assert "--gh-token-var RH_FORGE_GITHUB_TOKEN" in skill_arg
 
     @mock.patch("run_pipeline.subprocess.run")
     def test_exit_zero_no_artifacts_returns_false(self, mock_run, tmp_path):
@@ -478,6 +499,24 @@ class TestSetupTargetRepo:
         cmd = clone_call[0][0]
         assert "--fork-owner" in cmd
         assert "dora-the-ai-coder" in cmd
+        assert "EPIC_CODEGEN_GITHUB_TOKEN" in cmd
+
+    @mock.patch("run_pipeline.subprocess.run")
+    def test_clone_uses_the_overriding_identity(self, mock_run, tmp_path):
+        """Cloning a private repo with the shared bot's token 404s, which
+        surfaces as 'no target_repo' rather than as a credential fault."""
+        mock_run.return_value = mock.MagicMock(
+            returncode=0, stdout="{}", stderr="")
+        epic = _epic("RHAI-1")
+        epic["target_repo"] = "rh-forge/rh-forge-ui"
+        args = _make_args(fork_owner="dora-the-ai-coder",
+                          output_dir=str(tmp_path))
+        setup_target_repo(epic, args)
+
+        cmd = mock_run.call_args_list[0][0][0]
+        assert "ederign" in cmd
+        assert "RH_FORGE_GITHUB_TOKEN" in cmd
+        assert "dora-the-ai-coder" not in cmd
 
 
 # ─── TestCleanArtifacts ───────────────────────────────────────────────────────
@@ -688,9 +727,15 @@ class TestLoadRepoMapping:
         result = load_repo_mapping(str(tmp_path / "nonexistent.json"))
         assert result == {}
 
-    def test_shipped_mapping_covers_openc_ui(self):
+    def test_shipped_mapping_covers_rh_forge_ui(self):
         mapping = load_repo_mapping()
-        assert "ederign/openc-ui-by-agentic-sdlc" in mapping
+        assert "rh-forge/rh-forge-ui" in mapping
+
+    def test_retired_openc_ui_entry_is_gone(self):
+        """Superseded by rh-forge/rh-forge-ui (RHAISTRAT-2565 closed). Its
+        keywords moved to the live repo rather than being dropped, so a
+        legacy reference resolves forward instead of to a dead target."""
+        assert "ederign/openc-ui-by-agentic-sdlc" not in load_repo_mapping()
 
     def test_shipped_mapping_keywords_are_lists_of_strings(self):
         for repo, config in load_repo_mapping().items():
@@ -704,6 +749,85 @@ class TestLoadRepoMapping:
         for repo, config in load_repo_mapping().items():
             for keyword in config["keywords"]:
                 assert len(keyword) >= 4, f"{repo}: {keyword!r} is too short"
+
+
+class TestIdentityForRepo:
+    """Per-repo GitHub credential override (ADR-0035)."""
+
+    _MAPPING = {
+        "opendatahub-io/odh-dashboard": {"keywords": ["dashboard"]},
+        "rh-forge/rh-forge-ui": {
+            "keywords": ["rh-forge"],
+            "fork_owner": "ederign",
+            "gh_token_var": "RH_FORGE_GITHUB_TOKEN",
+        },
+    }
+
+    def test_unmapped_repo_uses_the_shared_bot(self):
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        identity = identity_for_repo(
+            "some/other-repo", args, mapping=self._MAPPING)
+        assert identity["fork_owner"] == "dora-the-ai-coder"
+        assert identity["gh_token_var"] == "EPIC_CODEGEN_GITHUB_TOKEN"
+
+    def test_mapped_repo_without_override_uses_the_shared_bot(self):
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        identity = identity_for_repo(
+            "opendatahub-io/odh-dashboard", args, mapping=self._MAPPING)
+        assert identity["fork_owner"] == "dora-the-ai-coder"
+        assert identity["gh_token_var"] == "EPIC_CODEGEN_GITHUB_TOKEN"
+
+    def test_override_replaces_owner_and_token_var(self):
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        identity = identity_for_repo(
+            "rh-forge/rh-forge-ui", args, mapping=self._MAPPING)
+        assert identity["fork_owner"] == "ederign"
+        assert identity["gh_token_var"] == "RH_FORGE_GITHUB_TOKEN"
+
+    def test_our_user_follows_fork_owner(self):
+        """The review loop filters out our_user's comments. If this kept
+        naming the bot while the PR was authored by someone else, the
+        pipeline would answer its own comments forever."""
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        identity = identity_for_repo(
+            "rh-forge/rh-forge-ui", args, mapping=self._MAPPING)
+        assert identity["our_user"] == "ederign"
+
+    def test_explicit_our_user_wins_over_fork_owner(self):
+        mapping = {"a/b": {"keywords": [], "fork_owner": "someone",
+                           "our_user": "someone-else"}}
+        identity = identity_for_repo("a/b", _make_args(), mapping=mapping)
+        assert identity["our_user"] == "someone-else"
+
+    @pytest.mark.parametrize("target", [
+        "rh-forge/rh-forge-ui",
+        "https://github.com/rh-forge/rh-forge-ui",
+        "https://github.com/rh-forge/rh-forge-ui.git",
+        "git@github.com:rh-forge/rh-forge-ui.git",
+    ])
+    def test_override_survives_url_forms(self, target):
+        """target_repo reaches this as a bare slug from the mapping but as a
+        full clone URL from a stored run state, and both must find the
+        override -- missing it silently falls back to a token that 404s on a
+        private repo."""
+        identity = identity_for_repo(
+            target, _make_args(), mapping=self._MAPPING)
+        assert identity["fork_owner"] == "ederign"
+
+    def test_empty_target_repo_falls_back_to_defaults(self):
+        args = _make_args(fork_owner="dora-the-ai-coder")
+        identity = identity_for_repo("", args, mapping=self._MAPPING)
+        assert identity["fork_owner"] == "dora-the-ai-coder"
+        assert identity["gh_token_var"] == "EPIC_CODEGEN_GITHUB_TOKEN"
+
+    def test_shipped_override_is_wired_for_the_private_target(self):
+        identity = identity_for_repo(
+            "rh-forge/rh-forge-ui", _make_args(fork_owner="dora-the-ai-coder"))
+        assert identity == {
+            "fork_owner": "ederign",
+            "gh_token_var": "RH_FORGE_GITHUB_TOKEN",
+            "our_user": "ederign",
+        }
 
 
 # ─── TestResolveTargetRepo ───────────────────────────────────────────────────
@@ -742,15 +866,34 @@ class TestResolveTargetRepo:
         "Conversation Surface with Streamed Rendering",
     ])
     def test_openc_ui_epics_resolve_without_llm_fallback(self, title):
-        """RHAI-543/544. A second match would defer to the LLM, so this only
-        holds while no other repo's keywords collide."""
+        """RHAI-543/544, whose repo is now rh-forge/rh-forge-ui. A second
+        match would defer to the LLM, so this only holds while no other
+        repo's keywords collide."""
         epic = _epic("RHAI-1", title=title)
         epic["body"] = (
             "Implement this in the openc-ui-by-agentic-sdlc repository, "
             "which requires a PatternFly 6 UI built on React 19."
         )
         result = resolve_target_repo(epic, load_repo_mapping())
-        assert result == "ederign/openc-ui-by-agentic-sdlc"
+        assert result == "rh-forge/rh-forge-ui"
+
+    @pytest.mark.parametrize("title,body", [
+        ("Data binding and honest rendering of draft proposals in the "
+         "home-page drawer",
+         "When a home-page item carries a draft id, the primary action opens "
+         "the drawer on that draft instead of navigating to the drafts list."),
+        ("Approval, undo, and revision handling for draft proposals in the "
+         "drawer",
+         "Wire the drawer's approve action to the same send services the "
+         "drafts list uses, and handle revision-under-review."),
+    ])
+    def test_rh_forge_epics_resolve_without_llm_fallback(self, title, body):
+        """RHAI-760/761 (RHAISTRAT-2671). Both must land on the one repo
+        without the LLM, which can only pick from this same mapping."""
+        epic = _epic("RHAI-1", title=title)
+        epic["body"] = body
+        assert resolve_target_repo(epic, load_repo_mapping()) == \
+            "rh-forge/rh-forge-ui"
 
     @mock.patch("run_pipeline.resolve_repo_via_llm", return_value="")
     def test_no_match_calls_llm(self, mock_llm):
