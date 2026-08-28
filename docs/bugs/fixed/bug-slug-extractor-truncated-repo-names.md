@@ -2,7 +2,8 @@
 id: bug-slug-extractor-truncated-repo-names
 title: Duplicate slug extractor truncated repo names ending in . g i t
 type: bug
-status: open
+status: fixed
+commits: ["34b863a"]
 repos: [epic-code-gen]
 decisions: [ADR-0030, ADR-0035]
 ---
