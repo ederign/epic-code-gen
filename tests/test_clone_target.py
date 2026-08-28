@@ -12,7 +12,6 @@ sys.path.insert(0, sys_path_fix)
 
 from clone_target import (
     clone,
-    _extract_slug,
     _url_matches,
     _ensure_branch,
     _setup_fork_remote,
@@ -49,24 +48,6 @@ def _init_repo(path):
 
 
 # ─── URL Utilities ───────────────────────────────────────────────────────────
-
-class TestExtractSlug:
-
-    def test_https_url(self):
-        assert _extract_slug("https://github.com/org/repo") == "org/repo"
-
-    def test_https_with_git_suffix(self):
-        assert _extract_slug("https://github.com/org/repo.git") == "org/repo"
-
-    def test_ssh_url(self):
-        assert _extract_slug("git@github.com:org/repo.git") == "org/repo"
-
-    def test_trailing_slash(self):
-        assert _extract_slug("https://github.com/org/repo/") == "org/repo"
-
-    def test_non_github(self):
-        assert _extract_slug("https://gitlab.com/org/repo") is None
-
 
 class TestUrlMatches:
 
@@ -290,6 +271,23 @@ class TestSetupForkRemote:
             capture_output=True, text=True,
         )
         assert "x-access-token" in out.stdout
+
+    def test_repo_name_ending_in_i_is_not_truncated(self, tmp_path):
+        """Regression: rh-forge-ui.git must not become rh-forge-u.
+
+        The old module-local slug extractor used rstrip(".git"), so every
+        fork API call for this repo hit a name that doesn't exist and 404'd.
+        """
+        repo = _init_repo(tmp_path / "repo")
+        with patch("github_utils.ensure_fork",
+                   return_value=("ederign/rh-forge-ui", False)) as ensure_fork:
+            result = _setup_fork_remote(
+                repo, "https://github.com/rh-forge/rh-forge-ui.git", "ederign",
+                token="ghp_test123")
+
+        ensure_fork.assert_called_once_with(
+            "rh-forge", "rh-forge-ui", "ederign", "ghp_test123")
+        assert result["fork_url"] == "https://github.com/ederign/rh-forge-ui.git"
 
     def test_with_token_creates_fork(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
