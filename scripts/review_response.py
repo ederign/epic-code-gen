@@ -296,13 +296,18 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
                         target_repo=".target-repo", version=2,
                         dry_run=False, gh_token_var=None,
                         base_branch=None, fork_remote="fork",
-                        skip_rebase=False, agent_timeout=None):
+                        skip_rebase=False, agent_timeout=None,
+                        our_user=None):
     """Execute the full V2 review response flow.
 
     Args:
         agent_timeout: seconds the fix agent may run. Defaults to
             FIX_AGENT_TIMEOUT; callers should size it below their own budget so
             the rebase, triage, validation and push still fit inside.
+        our_user: the account this run acts as, whose own comments must not be
+            treated as review feedback. Defaults to review_config.json's
+            `our_user`. A target repo running under a non-default credential
+            passes its own, or the loop answers its own comments forever.
 
     Returns:
         dict: {success, comments_processed, fixes_applied, commit_sha,
@@ -313,7 +318,8 @@ def run_review_response(epic_id, pr_url, output_dir="artifacts",
     token = require_env(gh_token_var)
     config = load_review_config()
     bot_reviewers = set(config.get("bot_reviewers", []))
-    our_user = config.get("our_user", "dora-the-ai-coder")
+    if not our_user:
+        our_user = config.get("our_user", "dora-the-ai-coder")
     max_retries = config.get("validation_retry_limit", 3)
 
     owner, repo, number = parse_pr_url(pr_url)
@@ -644,6 +650,10 @@ def main():
                         help="Fork owner for push")
     parser.add_argument("--gh-token-var", default=None,
                         help="Env var for GitHub token")
+    parser.add_argument("--our-user", default=None,
+                        help="GitHub account this run acts as, whose own "
+                             "comments are not review feedback "
+                             "(default: review_config.json our_user)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Skip push and PR replies")
     parser.add_argument("--base-branch", default=None,
@@ -671,6 +681,7 @@ def main():
             base_branch=args.base_branch,
             skip_rebase=args.skip_rebase,
             agent_timeout=args.agent_timeout,
+            our_user=args.our_user,
         )
 
         if args.json:

@@ -139,8 +139,14 @@ def detect_required_tools(repo_path, language=None):
             or "[tool.uv]" in pyproject):
         tools.append("uv")
 
-    if os.path.isfile(os.path.join(repo_path, "yarn.lock")):
-        tools.append("yarn")
+    # The JS package manager the repo declares. Only yarn.lock used to be
+    # checked here, so a pnpm repo preflighted clean and then failed every
+    # check with exit 127 — the exact environment-fault-scored-as-bad-code
+    # this gate exists to prevent (ADR-0025).
+    if language in ("typescript", "javascript"):
+        pkg_manager = detect_package_manager(repo_path)
+        if pkg_manager != "npm":
+            tools.append(pkg_manager)
     if os.path.isfile(os.path.join(repo_path, "requirements.txt")):
         tools.append("pip3")
 
@@ -433,6 +439,43 @@ def _parse_package_json_scripts(repo_path):
         return []
 
 
+def detect_package_manager(repo_path):
+    """Which package manager this JS/TS repo's scripts must be run through.
+
+    Running the wrong one is not a style question. A pnpm workspace installed
+    with npm resolves a different dependency tree, and `npm run lint` in a repo
+    whose node_modules pnpm laid out either fails outright or checks something
+    other than what CI checks.
+
+    `packageManager` (the corepack field) is authoritative when present —
+    a repo can carry a stale secondary lockfile, but it only declares one.
+
+    Returns:
+        str: "pnpm", "yarn" or "npm" (the default when nothing is declared).
+    """
+    pkg = os.path.join(repo_path, "package.json")
+    if os.path.isfile(pkg):
+        try:
+            with open(pkg, encoding="utf-8") as f:
+                declared = json.load(f).get("packageManager", "")
+            name = str(declared).split("@", 1)[0].strip()
+            if name in ("pnpm", "yarn", "npm"):
+                return name
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if os.path.isfile(os.path.join(repo_path, "pnpm-lock.yaml")):
+        return "pnpm"
+    if os.path.isfile(os.path.join(repo_path, "yarn.lock")):
+        return "yarn"
+    return "npm"
+
+
+def _script_command(pkg_manager, script):
+    """The command that runs a package.json script under this manager."""
+    return f"{pkg_manager} run {script}"
+
+
 def discover_commands(repo_path, language):
     """Discover available validation commands for the repo.
 
@@ -445,7 +488,8 @@ def discover_commands(repo_path, language):
     if language == "go":
         commands.update(_discover_go_commands(make_targets))
     elif language in ("typescript", "javascript"):
-        commands.update(_discover_js_commands(make_targets, npm_scripts))
+        commands.update(_discover_js_commands(
+            make_targets, npm_scripts, detect_package_manager(repo_path)))
     elif language == "python":
         commands.update(_discover_python_commands(make_targets))
     elif language == "rust":
@@ -476,24 +520,24 @@ def _discover_go_commands(make_targets):
     return commands
 
 
-def _discover_js_commands(make_targets, npm_scripts):
+def _discover_js_commands(make_targets, npm_scripts, pkg_manager="npm"):
     commands = {}
 
     if "lint" in npm_scripts:
-        commands["lint"] = "npm run lint"
+        commands["lint"] = _script_command(pkg_manager, "lint")
     elif any("lint" in t.lower() for t in make_targets):
         target = next(t for t in make_targets if "lint" in t.lower())
         commands["lint"] = f"make {target}"
 
     if "typecheck" in npm_scripts:
-        commands["typecheck"] = "npm run typecheck"
+        commands["typecheck"] = _script_command(pkg_manager, "typecheck")
     elif "tsc" in npm_scripts:
-        commands["typecheck"] = "npm run tsc"
+        commands["typecheck"] = _script_command(pkg_manager, "tsc")
     elif os.path.isfile("tsconfig.json"):
         commands["typecheck"] = "npx tsc --noEmit"
 
     if "test" in npm_scripts:
-        commands["test"] = "npm test"
+        commands["test"] = f"{pkg_manager} test"
     elif any("test" in t.lower() for t in make_targets):
         target = next(t for t in make_targets if "test" in t.lower())
         commands["test"] = f"make {target}"
