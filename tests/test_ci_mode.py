@@ -1111,3 +1111,70 @@ class TestUnknownStateExitCode:
         ])
 
         assert rc == 1
+
+
+class TestCodegenDeclinedIsNotFailed:
+    """RHAI-761: declining to start must leave the epic retryable.
+
+    `Failed` is terminal (CI_TERMINAL_STATES), so recording a refusal as a
+    failure skips the epic on every future run until its state is edited by
+    hand. A dependency that is not done yet is precisely the case a later run
+    fixes by itself.
+    """
+
+    def _run(self, tmp_path, monkeypatch, outcome, deps=None):
+        def fake_copy(data_repo, strategy_key, epic_id, output_dir,
+                      state=None):
+            # The real one folds the skill's run-metadata into live state.
+            if state is not None and outcome is not None:
+                state["codegen_outcome"] = outcome
+
+        monkeypatch.setattr(
+            "run_pipeline.generate_epic_task_from_jira", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "run_pipeline.fetch_strategy", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "run_pipeline.setup_target_repo", lambda *a, **k: True)
+        monkeypatch.setattr("run_pipeline._check_toolchain",
+                            lambda *a, **k: {"ok": True, "missing": []})
+        monkeypatch.setattr("run_pipeline.transition_issue",
+                            lambda *a, **k: (True, ""))
+        monkeypatch.setattr("run_pipeline.assign_issue", lambda *a, **k: None)
+        monkeypatch.setattr("run_pipeline.invoke_codegen",
+                            lambda *a, **k: False)
+        monkeypatch.setattr(
+            "run_pipeline._copy_codegen_artifacts_to_data_repo", fake_copy)
+
+        epic = _epic("RHAI-761", deps=deps)
+        state = {"status": "Ready", "current_version": 0}
+        result = ci_process_epic(
+            epic, state, _args(tmp_path), "srv", "usr", "tok")
+        return result, load_epic_state(tmp_path, "RHAISTRAT-1", "RHAI-761")
+
+    def test_blocked_outcome_returns_to_blocked(self, tmp_path, monkeypatch):
+        (action, _, to_state, detail), saved = self._run(
+            tmp_path, monkeypatch, "blocked", deps=["RHAI-760"])
+
+        assert action == BLOCKED
+        assert to_state == "Blocked"
+        assert saved["status"] == "Blocked"
+        assert saved["blocked_by"] == ["RHAI-760"]
+        assert "failure_reason" not in saved
+        assert "RHAI-760" in detail
+
+    def test_genuine_failure_is_still_failed(self, tmp_path, monkeypatch):
+        (action, _, to_state, _), saved = self._run(
+            tmp_path, monkeypatch, "failed")
+
+        assert action == FAILED
+        assert to_state == "Failed"
+        assert saved["status"] == "Failed"
+        assert saved["failure_reason"] == "codegen failed"
+
+    def test_no_outcome_recorded_is_still_failed(self, tmp_path, monkeypatch):
+        """A skill that dies without writing anything is a real failure."""
+        (action, _, to_state, _), saved = self._run(
+            tmp_path, monkeypatch, None)
+
+        assert action == FAILED
+        assert saved["status"] == "Failed"

@@ -45,6 +45,7 @@ from artifact_utils import (
     normalize_ci_status,
     read_codegen_outcome,
     read_frontmatter_validated,
+    update_frontmatter,
 )
 from fetch_epic import fetch_strategy
 from fetch_jira_epics import (
@@ -103,11 +104,54 @@ STATUS_ALIASES = {
 }
 
 
-def transition_issue(server, user, token, issue_key, target_status):
+def sync_epic_task_jira_status(issue_key, jira_status, epic_tasks_dir):
+    """Bring the on-disk epic-task snapshot in step with a Jira transition.
+
+    `check_dependencies.py` resolves a dependency by reading `jira_status`
+    from that dependency's epic-task file, and `fetch_jira_epics.py` writes
+    those files once, at the start of a run. So a transition this run performs
+    is invisible to the rest of the same run.
+
+    That cost RHAI-761 a cycle: the pipeline marked RHAI-760 Done and closed it
+    in Jira at 19:06:49, invoked the dependent 18 seconds later, and the
+    dependent's gate read a file still saying `In Progress` and refused work it
+    was entitled to do. Writing the transition back here keeps the file honest
+    for every later step, so the pipeline and the skill cannot disagree about
+    a fact the pipeline itself just changed.
+
+    No-op when the file does not exist — strategy keys have no epic-task, and
+    a `--no-report` run may have none at all.
+    """
+    if not issue_key or not jira_status or not epic_tasks_dir:
+        return False
+    path = os.path.join(epic_tasks_dir, f"{issue_key}.md")
+    if not os.path.isfile(path):
+        return False
+    try:
+        update_frontmatter(path, {"jira_status": jira_status}, "epic-task")
+    except Exception as e:
+        # A stale snapshot only ever costs a retry, so never fail the run
+        # over one — but say so, because it looks like a dependency bug.
+        print(f"  Warning: could not sync jira_status for {issue_key}: {e}",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def epic_tasks_dir_for(args):
+    """Where fetch_jira_epics.py writes the epic-task snapshots."""
+    return os.path.join(args.output_dir, "epic-tasks")
+
+
+def transition_issue(server, user, token, issue_key, target_status,
+                     epic_tasks_dir=None):
     """Transition a Jira issue to the given status.
 
     Discovers available transitions and matches by name (case-insensitive).
     Falls back to STATUS_ALIASES when no exact match is found.
+
+    `epic_tasks_dir`, when given, keeps that issue's epic-task snapshot in
+    step with the transition — see sync_epic_task_jira_status().
 
     Returns:
         tuple: (success: bool, from_status: str) — from_status is the
@@ -133,6 +177,8 @@ def transition_issue(server, user, token, issue_key, target_status):
             try:
                 do_transition(server, user, token, issue_key, t["id"])
                 print(f"  {issue_key}: transitioned to '{to_name}'")
+                sync_epic_task_jira_status(
+                    issue_key, to_name, epic_tasks_dir)
                 return True, to_name
             except Exception as e:
                 print(f"  Warning: transition to '{to_name}' failed "
@@ -821,7 +867,8 @@ def process_strategy(strategy_key, server, user, token, args):
             pr_url = known_pr_urls.get(key)
             if pr_url and check_pr_merged(pr_url):
                 ok, _ = transition_issue(
-                    server, user, token, key, "Done")
+                    server, user, token, key, "Done",
+                    epic_tasks_dir_for(args))
                 if ok:
                     completed_keys.add(key)
                     transitions_log[key] = [
@@ -855,7 +902,8 @@ def process_strategy(strategy_key, server, user, token, args):
             results[PROCESSED].append((epic_id, "reused completed run"))
             epic_transitions = []
             ok, _ = transition_issue(
-                server, user, token, epic_id, "Review")
+                server, user, token, epic_id, "Review",
+                epic_tasks_dir_for(args))
             epic_transitions.append({
                 "to": "Review", "success": ok})
             pr_url = read_pr_url(epic_id, args.output_dir)
@@ -879,7 +927,8 @@ def process_strategy(strategy_key, server, user, token, args):
                 continue
 
         ok, _ = transition_issue(
-            server, user, token, epic_id, "In Progress")
+            server, user, token, epic_id, "In Progress",
+            epic_tasks_dir_for(args))
         epic_transitions.append({
             "to": "In Progress", "success": ok})
         assign_issue(server, user, token, epic_id,
@@ -892,7 +941,8 @@ def process_strategy(strategy_key, server, user, token, args):
         if success:
             results[PROCESSED].append((epic_id, "codegen completed"))
             ok, _ = transition_issue(
-                server, user, token, epic_id, "Review")
+                server, user, token, epic_id, "Review",
+                epic_tasks_dir_for(args))
             epic_transitions.append({
                 "to": "Review", "success": ok})
 
@@ -904,7 +954,8 @@ def process_strategy(strategy_key, server, user, token, args):
             results[FAILED].append((epic_id, "codegen failed"))
             if original_status:
                 ok, _ = transition_issue(
-                    server, user, token, epic_id, original_status)
+                    server, user, token, epic_id, original_status,
+                    epic_tasks_dir_for(args))
                 epic_transitions.append({
                     "to": original_status, "success": ok})
 
@@ -1365,7 +1416,8 @@ def _ci_handle_ready(epic, state, args, server, user, token):
     if state.pop("tooling_missing", None):
         save_epic_state(args.data_repo, epic["strategy_key"], epic_id, state)
 
-    transition_issue(server, user, token, epic_id, "In Progress")
+    transition_issue(server, user, token, epic_id, "In Progress",
+                     epic_tasks_dir_for(args))
     assign_issue(server, user, token, epic_id, AUTOMATIONBOT_ACCOUNT_ID)
 
     state["status"] = "Generating"
@@ -1401,12 +1453,29 @@ def _ci_handle_ready(epic, state, args, server, user, token):
                 f"Codegen v{state['current_version']}; {detail}"
         return PROCESSED, "Ready", "ReviewPending", \
             f"Codegen v{state['current_version']} completed"
-    else:
-        state["status"] = "Failed"
-        state["failure_reason"] = "codegen failed"
+    # The skill declining to start is not the skill failing. It reports
+    # `blocked` when a dependency is not done, which a later run can satisfy —
+    # so the epic goes back to Blocked and keeps its turn. Writing Failed here
+    # is terminal (CI_TERMINAL_STATES), and cost RHAI-761 every future run
+    # until its state was edited by hand.
+    if state.get("codegen_outcome") == "blocked":
+        state["status"] = "Blocked"
+        state.pop("failure_reason", None)
+        blocked_by = epic.get("dependencies") or state.get("blocked_by") or []
+        if blocked_by:
+            state["blocked_by"] = blocked_by
         save_epic_state(
             args.data_repo, epic["strategy_key"], epic_id, state)
-        return FAILED, "Ready", "Failed", "codegen failed"
+        detail = "codegen declined: dependencies not done"
+        if blocked_by:
+            detail = f"{detail} ({', '.join(blocked_by)})"
+        return BLOCKED, "Ready", "Blocked", detail
+
+    state["status"] = "Failed"
+    state["failure_reason"] = "codegen failed"
+    save_epic_state(
+        args.data_repo, epic["strategy_key"], epic_id, state)
+    return FAILED, "Ready", "Failed", "codegen failed"
 
 
 def _pr_is_live(pr_url):
@@ -1493,7 +1562,8 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
             save_epic_state(
                 args.data_repo, epic["strategy_key"], epic_id, state)
 
-            transition_issue(server, user, token, epic_id, "Review")
+            transition_issue(server, user, token, epic_id, "Review",
+                             epic_tasks_dir_for(args))
             link_pr_to_jira(server, user, token, epic_id, pr_url)
             return PROCESSED, "ReviewPending", "PRCreated", \
                 f"PR created (avg={avg:.1f})"
@@ -1518,7 +1588,8 @@ def _ci_handle_review_pending(epic, state, args, server, user, token):
                 save_epic_state(
                     args.data_repo, epic["strategy_key"], epic_id, state)
 
-                transition_issue(server, user, token, epic_id, "Review")
+                transition_issue(server, user, token, epic_id, "Review",
+                             epic_tasks_dir_for(args))
                 link_pr_to_jira(server, user, token, epic_id, pr_url)
                 return PROCESSED, "ReviewPending", "PRCreated", \
                     f"Near-miss PR created (avg={avg:.1f})"
@@ -1594,7 +1665,8 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
             args.data_repo, epic["strategy_key"], epic_id, state)
 
         if new_state == "Done":
-            transition_issue(server, user, token, epic_id, "Done")
+            transition_issue(server, user, token, epic_id, "Done",
+                             epic_tasks_dir_for(args))
             return PROCESSED, "PRCreated", "Done", "PR merged"
         elif new_state == "PRChangesRequested":
             return _ci_handle_pr_changes(
@@ -1610,7 +1682,8 @@ def _ci_handle_pr_created(epic, state, args, server, user, token):
             state["pr_state"] = "merged"
             save_epic_state(
                 args.data_repo, epic["strategy_key"], epic_id, state)
-            transition_issue(server, user, token, epic_id, "Done")
+            transition_issue(server, user, token, epic_id, "Done",
+                             epic_tasks_dir_for(args))
             return PROCESSED, "PRCreated", "Done", "PR merged (gh fallback)"
         return SKIPPED, "PRCreated", "PRCreated", "PR still open"
 

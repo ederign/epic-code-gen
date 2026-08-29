@@ -63,8 +63,16 @@ Classify the clone failure the way preflight already classifies a missing tool:
 Worth extracting the retryable-vs-terminal judgement into one helper shared
 with the preflight gate, rather than a second ad-hoc copy of the rule.
 
+That helper now has a third caller waiting for it:
+[[bug-declined-codegen-marked-terminally-failed]] fixed the same
+retryable-written-as-terminal mistake for the codegen branch of
+`_ci_handle_ready`, with its own inline rule. Two ad-hoc copies exist; the
+clone branch would be the third. Fixing this one should fold all three
+together.
+
 ## Related
 
+- [[bug-declined-codegen-marked-terminally-failed]] — the sibling case, fixed.
 - [[bug-slug-extractor-truncated-repo-names]]
 - [[task-toolchain-preflight]]
 - [[task-per-repo-github-identity]]

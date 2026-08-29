@@ -94,7 +94,20 @@ python3 scripts/check_dependencies.py ${EPIC_ID}
 ```
 
 Exit 0 means proceed; exit 1 names the dependencies that are not done, and
-this run stops there.
+this run stops there. Record the stop as `codegen_outcome=blocked`, never
+`failed`:
+
+```bash
+python3 scripts/frontmatter.py merge-run-metadata \
+  artifacts/codegen-runs/${EPIC_ID}/run-metadata.yaml \
+  epic_id=${EPIC_ID} codegen_outcome=blocked versions=0
+```
+
+Declining to start is not failing. The pipeline reads this to decide whether
+the epic keeps its turn: `failed` writes the terminal CI state `Failed` and
+the epic is skipped on every future run until someone edits the data repo by
+hand, which is what happened to RHAI-761. `blocked` sends it back to `Blocked`
+to be retried once the dependency lands.
 
 Check `jira_status`, never the dependency's `status`. Every epic-task file is
 regenerated from Jira on each run with `status: Pending` hardcoded
