@@ -477,6 +477,17 @@ class TestReadCodegenOutcome:
     def test_ci_state_is_not_an_outcome(self):
         assert read_codegen_outcome({"status": "PRCreated"}) is None
 
+    def test_blocked_ci_state_is_not_the_blocked_outcome(self):
+        """`Blocked` the CI state and `blocked` the outcome are different things.
+
+        The state means "waiting on a dependency, per the DAG"; the outcome
+        means "the skill was invoked and declined to generate". They must not
+        be read as each other, or a legacy state file would look like a
+        declined run.
+        """
+        assert read_codegen_outcome({"status": "Blocked"}) is None
+        assert read_codegen_outcome({"codegen_outcome": "blocked"}) == "blocked"
+
     def test_missing(self):
         assert read_codegen_outcome({}) is None
         assert read_codegen_outcome(None) is None

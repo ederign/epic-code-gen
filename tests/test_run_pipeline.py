@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from artifact_utils import read_frontmatter
+from check_dependencies import check_dependencies
 from fetch_jira_epics import SKIP_LABEL
 from run_pipeline import (
     AUTOMATIONBOT_ACCOUNT_ID,
@@ -29,6 +31,7 @@ from run_pipeline import (
     read_pr_url,
     resolve_repo_via_llm,
     resolve_target_repo,
+    sync_epic_task_jira_status,
     transition_issue,
     invoke_codegen,
     setup_target_repo,
@@ -40,6 +43,11 @@ from run_pipeline import (
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+# Epic-level transitions carry the epic-tasks dir so the snapshot is refreshed
+# alongside Jira; it derives from the args output_dir the tests below pass.
+_TASKS_DIR = os.path.join("/tmp/test-artifacts", "epic-tasks")
+
 
 def _epic(epic_id, jira_status="New", dependencies=None, blocks=None,
           title=None, jira_labels=None):
@@ -1037,7 +1045,8 @@ class TestProcessStrategyTransitions:
 
         calls = mock_trans.call_args_list
         assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
-        assert calls[1] == mock.call("s", "u", "t", "RHAI-1", "In Progress")
+        assert calls[1] == mock.call(
+            "s", "u", "t", "RHAI-1", "In Progress", _TASKS_DIR)
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -1060,7 +1069,8 @@ class TestProcessStrategyTransitions:
 
         calls = mock_trans.call_args_list
         assert len(calls) == 3
-        assert calls[2] == mock.call("s", "u", "t", "RHAI-1", "Review")
+        assert calls[2] == mock.call(
+            "s", "u", "t", "RHAI-1", "Review", _TASKS_DIR)
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -1084,8 +1094,9 @@ class TestProcessStrategyTransitions:
         calls = mock_trans.call_args_list
         assert len(calls) == 3
         assert calls[0] == mock.call("s", "u", "t", "RHAISTRAT-1", "In Progress")
-        assert calls[1] == mock.call("s", "u", "t", "RHAI-1", "In Progress")
-        assert calls[2] == mock.call("s", "u", "t", "RHAI-1", "New")
+        assert calls[1] == mock.call(
+            "s", "u", "t", "RHAI-1", "In Progress", _TASKS_DIR)
+        assert calls[2] == mock.call("s", "u", "t", "RHAI-1", "New", _TASKS_DIR)
 
     @mock.patch("run_pipeline.assign_issue")
     @mock.patch("run_pipeline.transition_issue")
@@ -1590,7 +1601,7 @@ class TestReconciliation:
                 _, results, transitions_log, _ = process_strategy(
                     "RHAISTRAT-1", "s", "u", "t", args)
 
-        mock_trans.assert_any_call("s", "u", "t", "RHAI-1", "Done")
+        mock_trans.assert_any_call("s", "u", "t", "RHAI-1", "Done", _TASKS_DIR)
         assert any("merged" in s[1].lower() for s in results[SKIPPED]
                     if s[0] == "RHAI-1")
         assert "RHAI-1" in transitions_log
@@ -1720,3 +1731,96 @@ class TestAssignment:
 
         mock_assign.assert_not_called()
         mock_trans.assert_not_called()
+
+
+# ─── Mid-run Jira transitions must reach the epic-task snapshot ─────────────
+
+class TestSyncEpicTaskJiraStatus:
+    """RHAI-761: a transition this run makes must be visible to this run."""
+
+    _TRANSITIONS = [{"id": "31", "to": {"name": "Closed"}}]
+
+    def _write_epic_task(self, tasks_dir, epic_id, jira_status):
+        os.makedirs(tasks_dir, exist_ok=True)
+        path = os.path.join(tasks_dir, f"{epic_id}.md")
+        with open(path, "w") as f:
+            f.write("---\n"
+                    f"epic_id: {epic_id}\n"
+                    f"title: Epic {epic_id}\n"
+                    "strategy_key: RHAISTRAT-2671\n"
+                    "target_repo: rh-forge/rh-forge-ui\n"
+                    "status: Pending\n"
+                    f"jira_status: {jira_status}\n"
+                    "dependencies: []\n"
+                    "---\n\n"
+                    f"# {epic_id}\n")
+        return path
+
+    def test_writes_new_status_to_epic_task(self, tmp_path):
+        tasks = str(tmp_path / "epic-tasks")
+        path = self._write_epic_task(tasks, "RHAI-760", "In Progress")
+
+        assert sync_epic_task_jira_status("RHAI-760", "Closed", tasks) is True
+        assert read_frontmatter(path)[0]["jira_status"] == "Closed"
+
+    def test_missing_epic_task_is_not_an_error(self, tmp_path):
+        # Strategy keys have no epic-task file.
+        assert sync_epic_task_jira_status(
+            "RHAISTRAT-2671", "In Progress", str(tmp_path)) is False
+
+    def test_no_dir_is_not_an_error(self):
+        assert sync_epic_task_jira_status("RHAI-760", "Closed", None) is False
+
+    @mock.patch("run_pipeline.do_transition")
+    @mock.patch("run_pipeline.get_transitions")
+    def test_transition_issue_syncs_the_snapshot(self, mock_get, mock_do,
+                                                 tmp_path):
+        mock_get.return_value = self._TRANSITIONS
+        tasks = str(tmp_path / "epic-tasks")
+        path = self._write_epic_task(tasks, "RHAI-760", "In Progress")
+
+        ok, to_name = transition_issue(
+            "s", "u", "t", "RHAI-760", "Done", tasks)
+
+        assert (ok, to_name) == (True, "Closed")
+        assert read_frontmatter(path)[0]["jira_status"] == "Closed"
+
+    @mock.patch("run_pipeline.do_transition",
+                side_effect=Exception("403 Forbidden"))
+    @mock.patch("run_pipeline.get_transitions")
+    def test_failed_transition_leaves_snapshot_alone(self, mock_get, mock_do,
+                                                     tmp_path):
+        """A status we did not actually reach must not be written down."""
+        mock_get.return_value = self._TRANSITIONS
+        tasks = str(tmp_path / "epic-tasks")
+        path = self._write_epic_task(tasks, "RHAI-760", "In Progress")
+
+        ok, _ = transition_issue("s", "u", "t", "RHAI-760", "Done", tasks)
+
+        assert ok is False
+        assert read_frontmatter(path)[0]["jira_status"] == "In Progress"
+
+    @mock.patch("run_pipeline.do_transition")
+    @mock.patch("run_pipeline.get_transitions")
+    def test_dependent_gate_passes_after_transition(self, mock_get, mock_do,
+                                                    tmp_path):
+        """The end-to-end regression: close a dependency, then gate on it.
+
+        Before the fix the pipeline closed RHAI-760 and invoked RHAI-761 in
+        the same run, and check_dependencies read a snapshot written before
+        the transition — so the dependent was refused work it could do.
+        """
+        mock_get.return_value = self._TRANSITIONS
+        tasks = str(tmp_path / "epic-tasks")
+        self._write_epic_task(tasks, "RHAI-760", "In Progress")
+        with open(os.path.join(tasks, "RHAI-761.md"), "w") as f:
+            f.write("---\nepic_id: RHAI-761\ntitle: Epic RHAI-761\n"
+                    "strategy_key: RHAISTRAT-2671\n"
+                    "target_repo: rh-forge/rh-forge-ui\n"
+                    "status: Pending\n"
+                    "jira_status: New\ndependencies:\n  - RHAI-760\n"
+                    "---\n\n# RHAI-761\n")
+
+        assert check_dependencies("RHAI-761", tasks)["all_done"] is False
+        transition_issue("s", "u", "t", "RHAI-760", "Done", tasks)
+        assert check_dependencies("RHAI-761", tasks)["all_done"] is True

@@ -33,7 +33,11 @@ CI_STATES = (
     "PRCreated", "PRChangesRequested", "Done", "Blocked", "Failed",
 )
 
-CODEGEN_OUTCOMES = ("completed", "exhausted", "failed", "error")
+# `blocked` is a refusal, not a failure: the skill declined to generate because
+# a dependency is not done. It exists so the pipeline can tell "this epic has
+# nothing to do yet" from "this epic tried and broke", which decides whether
+# the epic keeps its retry (RHAI-761 was marked terminally Failed for it).
+CODEGEN_OUTCOMES = ("completed", "exhausted", "failed", "error", "blocked")
 
 # Fields in run-metadata.yaml that belong to the pipeline's state machine. No
 # other producer may set them, and a producer's own metadata must never
