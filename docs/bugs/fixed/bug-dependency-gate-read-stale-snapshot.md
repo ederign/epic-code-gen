@@ -3,7 +3,7 @@ id: bug-dependency-gate-read-stale-snapshot
 title: Dependency gate read a snapshot the same run had already invalidated
 type: bug
 status: fixed
-commits: ["33797ef"]
+commits: ["a24e3e5"]
 repos: [epic-code-gen]
 decisions: [ADR-0025]
 ---

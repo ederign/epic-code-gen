@@ -3,7 +3,7 @@ id: bug-declined-codegen-marked-terminally-failed
 title: Codegen declining to start was recorded as a terminal failure
 type: bug
 status: fixed
-commits: ["33797ef"]
+commits: ["a24e3e5"]
 repos: [epic-code-gen]
 decisions: [ADR-0025]
 ---
